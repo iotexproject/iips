@@ -76,3 +76,4 @@ and [EEPs](https://eeps.io/), where we have learned and borrowed clauses heavily
 ## Changelog
 
 2019-05-20: Drafted the initial version of IIP guideline.
+2019-06-11: Added the IIP sample file.
