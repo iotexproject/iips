@@ -66,6 +66,8 @@ marked with `*` are optional and are described below. All other headers are requ
 * Resolution: <url>
 ```
 
+Refer to the [example](iip-X.md) for details.
+
 ## Acknowledgement
 
 Thanks for those who contribute to [BIPs](https://github.com/bitcoin/bips), [EIPs](https://github.com/ethereum/EIPs)
