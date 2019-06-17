@@ -2,7 +2,7 @@
   IIP: 2
   Title: Increasing Daily Epoch Reward Amount to 350K IOTX
   Author: Zhijie Shen (zhijie@iotex.io)
-  Discussions-To: 
+  Discussions-To: https://discord.gg/NxMKT5A
   Status: Draft
   Type: Standards Track
   Created: 2019-06-08
