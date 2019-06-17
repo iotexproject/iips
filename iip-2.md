@@ -25,7 +25,7 @@ reward number will be used.
 
 The epoch reward amount adjustment will be rolled out with v0.7.x. The exact date is still TBD.
 
-## Voting Process:
+## Voting Process
 
 We will collect the opinion from the community to decide if we want to increase the epoch reward amount. As the on-chain voting is not ready yet, we will vote in the discord channel: https://discord.gg/NxMKT5A. The voting process is defined here: https://docs.google.com/document/d/1qAcZtNeX6vadLTXp6k1CEADVJwNv7BMZQrtQSLhgpqQ/edit.
 
