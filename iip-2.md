@@ -28,7 +28,7 @@ The epoch reward amount adjustment will be rolled out with v0.7.2, and the hard 
 
 We will collect the opinion from the community to decide if we want to increase the epoch reward amount. As the on-chain voting is not ready yet, we will vote in the discord channel: https://discord.gg/NxMKT5A. The voting process is defined here: https://docs.google.com/document/d/1qAcZtNeX6vadLTXp6k1CEADVJwNv7BMZQrtQSLhgpqQ/edit.
 
-# Update
+## Update
 
 We originally planed to increase epoch reward to 350K per day, but after discussion, we decided to increase to 450K per day
 directly. Another uber proposal vote that propose for this is https://member.iotex.io/polls.
