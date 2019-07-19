@@ -3,7 +3,7 @@
   Title: Removing the per action gas limit
   Author: Zhijie Shen (zhijie@iotex.io)
   Status: Draft
-  Type: Standards Track
+  Type: Accepted
   Created: 2019-06-17
 ```
 
@@ -42,6 +42,10 @@ API call.
 Note that the read gas limit is a node/system config, which could vary from node to node.
 
 Note that the per action gas limit can't be removed from the genesis for the backward compatibility.
+
+## Updates
+
+The per action gas limit is removed in the release `v0.7.2`, and will be activated from block 864,001.
 
 ## Copyright
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
