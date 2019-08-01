@@ -3,7 +3,7 @@
   Title: Increasing Daily Epoch Reward Amount to 450K IOTX
   Author: Zhijie Shen (zhijie@iotex.io)
   Discussions-To: https://discord.gg/NxMKT5A
-  Status: Accepted
+  Status: Final
   Type: Standards Track
   Created: 2019-06-08
 ```
@@ -35,6 +35,7 @@ directly. Another uber proposal vote that propose for this is https://member.iot
 
 ## Changelog
 
+2019-07-31: New epoch reward amount was activated
 2019-07-19: Update the progress
 2019-06-08: Created the issue
 2019-06-10: Added the details
