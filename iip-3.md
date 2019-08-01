@@ -2,8 +2,8 @@
   IIP: 3
   Title: Removing the per action gas limit
   Author: Zhijie Shen (zhijie@iotex.io)
-  Status: Draft
-  Type: Accepted
+  Status: Final
+  Type: Standards Track
   Created: 2019-06-17
 ```
 
@@ -46,6 +46,8 @@ Note that the per action gas limit can't be removed from the genesis for the bac
 ## Updates
 
 The per action gas limit is removed in the release `v0.7.2`, and will be activated from block 864,001.
+
+The per action gas limit removal was activated on 2019-07-31.
 
 ## Copyright
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
