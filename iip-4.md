@@ -2,7 +2,7 @@
   IIP: 4
   Title: Lowering the block interval time
   Author: Dustin Xie (dustin.xie@iotex.io)
-  Status: Draft
+  Status: Implementing
   Type: Standards Track
   Created: 2019-08-01
 ```
