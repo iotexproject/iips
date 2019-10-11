@@ -2,7 +2,7 @@
 IIP: 5
 Title: Classifying EVM Error Status
 Author: Dorothy Ko (dorothy@iotex.io)
-Status: Draft
+Status: Final
 Type: Standards Track
 Created: 2019-08-14
 ```
