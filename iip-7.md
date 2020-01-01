@@ -67,7 +67,7 @@ Once the user read through the App consent and the verification information, and
 Header:
 
 ``` json
-{“alg”: “EK256K”, “typ”: “JWT”}
+{"alg": "EK256K", "typ": "JWT"}
 ```
 
 Payload Type:
