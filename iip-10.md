@@ -1,6 +1,6 @@
 ```
 IIP: 10
-Title: Enable IoTeX blockchain to process transaction sent in web3js format
+Title: Support Web3.js APIs
 Author: Dustin Xie (dustin.xie@iotex.io)
 Status: WIP
 Type: Standards Track
@@ -8,13 +8,13 @@ Created: 2021-03-29
 ```
 
 ## Abstract
-This document proposed a method to enable IoTeX blockchain process transaction sent in web3js format
+This document proposed an improvement for IoTeX blockchain to support Web3.js APIs and integrate seamlessly with standard tools and dapps.
 
 ## Motivation
-TDB
+Since its launch, IoTeX blockchain has its definition of APIs known as `Antenna`. As time goes by, we receive more and more requirements to have IoTeX blockchain to support commonly used tools and dapps such as metamask, truffle, remix, subgraph, etc.
 
 ## Specification
-4 components are required to make this feature work:
+Four components are required to make this feature work:
 
 1. A relayer service to receive raw transaction and translate it to IoTeX transaction, and broadcast to IoTeX blockchain endpoint. Upon receiving a raw transaction, the relayer performs the following tasks:
    1. decode the raw transaction, extract (nonce, gas price, gas limit, recipient, amount, payload)
