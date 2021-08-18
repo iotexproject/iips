@@ -30,7 +30,7 @@ Four components are required to make this work:
 3. iotex-core support for transaction with `externChainID`
    1. upon receiving transfer and execution transaction, if the `externChainID` field equals the network's external chain ID, do the following additional checks:
    2. decode the transaction, extract (nonce, gas price, gas limit, recipient, amount, payload)
-   3. use these to reconstruct the raw transaction and compute the corresponding the raw hash
+   3. use these to reconstruct the raw transaction and compute the corresponding raw hash
    4. extract signature bytes from the transaction, and compute the signed hash
    
 4. iotex-core support for global external chain ID
@@ -49,8 +49,8 @@ This IIP introduces a new compatible type of on-chain transaction that does not 
 
 ## Implementation
 - The new proxy service - https://github.com/iotexproject/babel-api 
-- iotex-core support - https://github.com/iotexproject/iotex-core/pull/2586
-- External chain IDs registreation - https://github.com/ethereum-lists/chains/pull/194
+- iotex-core support - https://github.com/iotexproject/iotex-core/commit/6348f251bcc57b675cc97a660b0c795156be04df
+- External chain IDs registreation - https://github.com/ethereum-lists/chains/commit/5f49c91806717479ac72cbbc0fd0028c24c69239
 
 ## Copyright
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
