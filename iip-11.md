@@ -56,5 +56,21 @@ carefully understand each one's situation
    ID check is enforced
    3. Activate the hard-fork on mainnet
 
+## Replay Attack Immunity
+The use of a different chain ID prevents replay attack between IoTeX mainnet
+and testnet. 
+
+On the other hand, the raw hash of IoTeX native tx is computed as the keccak256
+hash of the tx's serialized data bytes, that is:
+```
+data = tx.Serialize()
+h = keccak256(data)
+```
+which is different from [EIP155](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-155.md#specification)
+specification, so the same tx will have different raw hash values when signing
+as native tx vs. signing as RLP-encoded (see [here](/iip-10.md)). Hence the
+proposed solution is also immune to replay attack targeted between the IoTeX
+and Ethereum blockchain.
+
 ## Copyright
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
