@@ -1,6 +1,6 @@
 ```
 IIP: 12
-Title: Support staking action in Web3
+Title: Support staking action via Web3
 Author: Haixiang Liu(), Dustin Xie (dustin.xie@iotex.io)
 Status: Draft
 Type: Standards Track
