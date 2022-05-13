@@ -54,7 +54,7 @@ IoTeX blockchain has its own Web3 API service known as `Babel`. When `Babel` rec
 
 
    ```js
-   // Example
+   // Example (pseudocode)
    // reconstruct a stake create action for binary data
    data := ABI.Unpack(rawData); 
    CreateStake := CreateStake{
