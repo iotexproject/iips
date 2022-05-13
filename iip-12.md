@@ -1,7 +1,7 @@
 ```
 IIP: 12
 Title: Support staking action via Web3
-Author: Haixiang Liu(), Dustin Xie (dustin.xie@iotex.io)
+Author: Haixiang Liu(haixiang@iotex.io), Dustin Xie (dustin.xie@iotex.io)
 Status: Draft
 Type: Standards Track
 Category: Core
@@ -14,7 +14,7 @@ TBD
 
 ## Motivation
 
-During the growth of eco-system of IoTeX, the demand for supporting staking action via Web3 is increasing. However, the nature of native ethereum transaction is incompatible with our staking action transaction. This is because the data struction of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`)(https://github.com/ethereum/go-ethereum/blob/release/1.9/core/types/transaction.go), whereas our staking actions includes some extra data field. So it is hard to wrap our staking action into native ethereum transaction when transmitting the transaction via Web3.
+With the growth of eco-system of IoTeX, the demands for staking via Web3 is increasing. Currently, staking-related features are avilable in IoTeX `Antenna` API, which sends native staking actions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking actions includes some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking action directly via Web3.
 
 ## Specification
 
@@ -22,18 +22,18 @@ The discussion will be divided into two part:
 
 1. How are staking actions sent to IoTeX blockchain via Web3?
 
-2. How are staking actions verified?
+2. How are staking actions via Web3 verified?
 
 ### Part I: Transaction Transportation
 
 #### Transaction Creation(Staking action encoding)
 
-To send native staking action via Web3, the staking action is serialized into Protobuf data types, which is packed into `Payload` field of native transaction `tx.payload = Proto.Marshal(stakingAction.Proto())`. To differentiate the special transaction from normal ones, the `Recipient` field is marked with special address. To conclude, the modified transactions of staking actions via Web3 are different from normal transactions(transfer and execution) in three fields:
+To send native staking action via Web3, RLP encoding is used for serializing the staking action into binary data, which is packed into `Payload` field of native transaction `tx.payload = ABI.Pack(stakingAction)`. To differentiate the special staking transaction from normal ethereum transaction, the special `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is reserved for this special treatment. To conclude, the modified transactions from staking actions via Web3 are different in three fields:
 
 ```
 {
-Payload : Proto.Marshal(stakingAction.Proto()),
-Recipient : (Pre-defined special address),
+Payload : ABI.Pack(stakingAction),
+Recipient : "0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12",
 Amount : 0,
 } 
 ```
@@ -42,35 +42,282 @@ Amount : 0,
 
 #### Transaction Transportation(Staking action decoding)
 
-IoTeX blockchain has its own Web3 API known as `Babel`. When `Babel` receives eth_sendRawTransaction() request, it  uses IoTeX `Antenna`API to process such request, and send the result onto the chain. In the `Antenna`, staking action decoding includes three Steps:
+IoTeX blockchain has its own Web3 API service known as `Babel`. When `Babel` receives the web3 staking action via `eth_sendRawTransaction` method, it will translate the staking action in three steps:
 
 1. Decoding raw transaction data
 
    The six data fields of native transaction are extracted from the raw transaction
 
-2. Judge whether the recipient address belongs to the special address pool
+2. Check whether the recipient address is the special staking address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12`
 
-3. Decoding data field into native staking action
+3. Reconstruct native staking action by deserializing the data in `Payload` field with pre-defined `ABI`
 
-   Construct native staking action by deserializing the data in `Payload` field
 
    ```js
-   // construct a stake create action for example
-   const stakeAct = StakeCreate.deserializeBinary(data); 
-   sendActionReq.action.core.stakeCreate = {
-           candidateName: stakeAct.getCandidatename(),
-           stakedAmount: stakeAct.getStakedamount(),
-           stakedDuration: stakeAct.getStakedduration(),
-           autoStake: stakeAct.getAutostake(),
-           payload: stakeAct.getPayload()
+   // Example
+   // reconstruct a stake create action for binary data
+   data := ABI.Unpack(rawData); 
+   CreateStake := CreateStake{
+           candidateName: data["candName"],
+           stakedAmount: data["amount"],
+           stakedDuration: data["duration"],
+           autoStake: data["autoStake"],
+           payload: data["data"],
    };
    ```
 
+4. Send generated native staking action to the p2p network.
 
 ### Part II: Action Verification
 
-When IoTeX delegates received transaction requests, It will use the signature of the action in the request to verify the action. However, the signature of raw tx can't be directly used to verify native staking action.  We reconstruct the native staking action transaction using the same method mentioned in Part I. Then the hash calculated from the generated raw tx can be used to verfify the signature. 
+When IoTeX delegates receive the special staking action, It will use the signature in the action for verification. However, the hash of native action can't be directly used to verify the signature of raw tx. The staking action has to be encoded into ethereum transaction using the same method mentioned in Part I. Then the hash calculated from the generated raw tx can be used to verfify the signature. 
 
 ## Copyright
 
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+## Appendix
+
+
+`Web3Staking.abi`
+```
+[
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "address",
+				"name": "operatorAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "rewardAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "ownerAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint32",
+				"name": "duration",
+				"type": "uint32"
+			},
+			{
+				"internalType": "bool",
+				"name": "autoStake",
+				"type": "bool"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "candidateRegister",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "address",
+				"name": "operatorAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "rewardAddress",
+				"type": "address"
+			}
+		],
+		"name": "candidateUpdate",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "candName",
+				"type": "string"
+			},
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "changeCandidate",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "candName",
+				"type": "string"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint32",
+				"name": "duration",
+				"type": "uint32"
+			},
+			{
+				"internalType": "bool",
+				"name": "autoStake",
+				"type": "bool"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "createStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "depositToStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint32",
+				"name": "duration",
+				"type": "uint32"
+			},
+			{
+				"internalType": "bool",
+				"name": "autoStake",
+				"type": "bool"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "restake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "voterAddress",
+				"type": "address"
+			},
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "transferStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "unstake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint64",
+				"name": "bucketIndex",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint8[]",
+				"name": "data",
+				"type": "uint8[]"
+			}
+		],
+		"name": "withdrawStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	}
+]
+```
