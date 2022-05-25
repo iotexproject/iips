@@ -10,7 +10,7 @@ Created: 2021-08-23
 
 ## Abstract
 
-TBD
+This proposal explains the mechanism of supporting staking action via web3 
 
 ## Motivation
 
