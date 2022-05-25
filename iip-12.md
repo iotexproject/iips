@@ -1,6 +1,6 @@
 ```
 IIP: 12
-Title: Support staking action via Web3
+Title: Support staking action via JSON-RPC
 Author: Haixiang Liu(haixiang@iotex.io), Dustin Xie (dustin.xie@iotex.io)
 Status: Draft
 Type: Standards Track
@@ -10,25 +10,25 @@ Created: 2021-08-23
 
 ## Abstract
 
-This proposal explains the mechanism of supporting staking action via web3 
+This proposal explains the mechanism of supporting staking action via JSON-RPC 
 
 ## Motivation
 
-With the growth of eco-system of IoTeX, the demands for staking via Web3 is increasing. Currently, staking-related features are avilable in IoTeX `Antenna` API, which sends native staking actions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking actions includes some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking action directly via Web3.
+With the growth of eco-system of IoTeX, the demands for staking via JSON-RPC is increasing. Currently, staking-related features are avilable in IoTeX `Antenna` API, which sends native staking actions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking actions includes some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking action directly via JSON-RPC.
 
 ## Specification
 
 The discussion will be divided into two part: 
 
-1. How are staking actions sent to IoTeX blockchain via Web3?
+1. How are staking actions sent to IoTeX blockchain via JSON-RPC?
 
-2. How are staking actions via Web3 verified?
+2. How are staking actions via JSON-RPC verified?
 
 ### Part I: Transaction Transportation
 
 #### Transaction Creation(Staking action encoding)
 
-To send native staking action via Web3, RLP encoding is used for serializing the staking action into binary data, which is packed into `Payload` field of native transaction `tx.payload = ABI.Pack(stakingAction)`. To differentiate the special staking transaction from normal ethereum transaction, the special `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is reserved for this special treatment. To conclude, the modified transactions from staking actions via Web3 are different in three fields:
+To send native staking action via JSON-RPC, RLP encoding is used for serializing the staking action into binary data, which is packed into `Payload` field of native transaction `tx.payload = ABI.Pack(stakingAction)`. To differentiate the special staking transaction from normal ethereum transaction, the special `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is reserved for this special treatment. To conclude, the modified transactions from staking actions via JSON-RPC are different in three fields:
 
 ```
 {
@@ -42,7 +42,7 @@ Amount : 0,
 
 #### Transaction Transportation(Staking action decoding)
 
-IoTeX blockchain has its own Web3 API service known as `Babel`. When `Babel` receives the web3 staking action via `eth_sendRawTransaction` method, it will translate the staking action in three steps:
+IoTeX blockchain has its own JSON-RPC API service. When the staking action is sent via `eth_sendRawTransaction` method, the API service will translate the staking action in three steps:
 
 1. Decoding raw transaction data
 
