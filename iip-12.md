@@ -14,11 +14,11 @@ This proposal explains the mechanism of supporting staking action via JSON-RPC
 
 ## Motivation
 
-With the growth of eco-system of IoTeX, the demands for staking via JSON-RPC is increasing. Currently, staking-related features are avilable in IoTeX `Antenna` API, which sends native staking actions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking actions includes some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking action directly via JSON-RPC.
+With the growth of eco-system of IoTeX, the demand for staking via JSON-RPC is increasing. Currently, staking-related features are available in IoTeX `Antenna` API, which sends native staking actions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking actions include some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking action directly via JSON-RPC.
 
 ## Specification
 
-The discussion will be divided into two part: 
+The discussion will be divided into two parts: 
 
 1. How are staking actions sent to IoTeX blockchain via JSON-RPC?
 
@@ -70,7 +70,7 @@ IoTeX blockchain has its own JSON-RPC API service. When the staking action is se
 
 ### Part II: Action Verification
 
-When IoTeX delegates receive the special staking action, It will use the signature in the action for verification. However, the hash of native action can't be directly used to verify the signature of raw tx. The staking action has to be encoded into ethereum transaction using the same method mentioned in Part I. Then the hash calculated from the generated raw tx can be used to verfify the signature. 
+When IoTeX delegates receive the special staking action, It will use the signature in the action for verification. However, the hash of native action can't be directly used to verify the signature of raw tx. The staking action has to be encoded into ethereum transaction using the same method mentioned in Part I. Then the hash calculated from the generated raw tx can be used to verify the signature. 
 
 ## Copyright
 
