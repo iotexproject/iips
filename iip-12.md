@@ -14,7 +14,7 @@ This proposal explains the mechanism of supporting staking transactions via JSON
 
 ## Motivation
 
-With the growth of eco-system of IoTeX, the demand for staking via JSON-RPC is increasing. Currently, staking-related features are only available in IoTeX `Antenna` SDK, who sends native staking transactions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking transactions include some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking transactions directly via JSON-RPC.
+With the growth of eco-system of IoTeX, the demand for staking via `Ethereum-compatible way` is increasing, so we decided to support it in `web3.js` for our API node. Currently, staking-related features are only available in IoTeX `Antenna` SDK, who sends native staking transactions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking transactions include some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking transactions directly via JSON-RPC.
 
 ## Specification
 
