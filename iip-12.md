@@ -14,7 +14,7 @@ This proposal explains the mechanism of supporting staking transactions via JSON
 
 ## Motivation
 
-With the growth of eco-system of IoTeX, the demand for staking via JSON-RPC is increasing. Currently, staking-related features are available in IoTeX `Antenna` API, which sends native staking transactions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking transactions include some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking transactions directly via JSON-RPC.
+With the growth of eco-system of IoTeX, the demand for staking via JSON-RPC is increasing. Currently, staking-related features are only available in IoTeX `Antenna` SDK, who sends native staking transactions to the API nodes via gRPC protocol. However, transaction transmission via JRPC(ethereum-based) is incompatible with our staking transaction transmission via gRPC. This is because the data structure of native ethereum transaction only contains six data fields(`AccountNonce`, `Price`, `GasLimit`, `Recipient`, `Amount`, `Payload`), whereas our staking transactions include some extra data fields(e.g. `staking candidate`, `staking amount`, etc.). So it is hard to send our native staking transactions directly via JSON-RPC.
 
 ## Specification
 
@@ -28,7 +28,7 @@ The discussion will be divided into two parts:
 
 #### Transaction Creation (Encode Staking Transaction)
 
-To send native staking transactions via JSON-RPC, RLP encoding is used for serializing staking transactions into binary data, which is packed into `Payload` field of native transaction `tx.payload = ABI.Pack(stakingAction)`. To differentiate the special staking transaction from normal ethereum transactions, the special `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is reserved for this special treatment. To conclude, the modified transactions from staking transactions via JSON-RPC are different in three fields:
+To send native staking transactions via JSON-RPC, RLP encoding is used for serializing staking transactions into binary data, which is packed into `Payload` field of native transaction `tx.payload = ABI.Pack(stakingAction)`. To differentiate special staking transactions from normal ethereum transactions, the special `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is reserved for this special treatment. To conclude, the modified transactions from staking transactions via JSON-RPC are different in three fields:
 
 ```
 {
