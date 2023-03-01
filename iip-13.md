@@ -38,6 +38,7 @@ Modification of the staking subprotocol involves a few native changes such as
 Since the main flow will not be changed, limited modifications are needed in staking subprotocol.
 
 ### System Contract
+![state-machine](iip-13-state-machine.jpg)
 System Contract, deployed and managed by gnosis safe, manages a new set of buckets that have the following attributes:
 - Auto-staking (aka stake-lock) enabled
 - Support a set of bucket types (the amount of IOTX in the bucket and its staking duration), starting with 10,000 IOTX and 30 days 
@@ -50,7 +51,9 @@ Three major functions of the system contract are:
     - Buckets could be updated in batch
 2. To withdraw a bucket:
     - Only the NFT owner could withdraw
-    - Signal exit and waiting for N days to exit
+    - Unlock a bucket
+    - Waiting for N days to unstake
+    - Signal exit (Unstake) and wait for three days to withdraw
 3. The reward will be sent to the NFT owners from the delegates. The dApp that tokenizes NFT into stIOTX tokens will be responsible to implement the voting strategy, e.g., vote for least-ranked delegate, which specific where the staked IOTX to be delegated to.
 
 #### Interfaces
@@ -58,7 +61,11 @@ Three major functions of the system contract are:
 function stake(uint256 duration, bytes12 delegate) external payable returns (uint256);
 function stake(uint256 amount, uint256 duration, bytes12[] calldata delegates) external payable returns (uint256[] memory);
 function unstake(uint256 tokenId) external onlyStakedToken(tokenId) onlyTokenOwner(tokenId);
+function unlock(uint256 tokenId) external returns (uint256);
+function lock(uint256 tokenId, uint256 duration) external);
 function withdraw(uint256 tokenId, address payable recipient) external onlyTokenOwner(tokenId);
+function extendDuration(uint256 tokenId, uint256 duration) external onlyLockedToken(tokenId) onlyTokenOwner(tokendId);
+function increaseAmount(uint256 tokenId, uint256 amount) external onlyLockedToken(tokenId) onlyTokenOwner(tokendId);
 function changeDelegate(uint256 tokenId, bytes12 delegate) external onlyStakedToken(tokenId) onlyTokenOwner(tokenId);
 function changeDelegates(uint256[] calldata tokenIds, bytes12 delegate) external;
 function emergencyWithdraw(uint256 tokenId, address payable recipient) external;
@@ -106,7 +113,12 @@ The proposed approach maximizes upgradability, security, and flexibility.
   - We are also considering limiting the total amount of IOTX coins that can be staked in this new way for a period of time before removing this limit. 
 
 ### Backward Compatibility
-No issues. Specifically, users who stake via the original staking subprotocol are not affected.
+Users who stake via the original staking subprotocol are not affected. The native buckets could be moved to system contract at any time by sending a migration action. A native bucket with amount `a` and duration `d` could be migrated as `n` system contract buckets with amount `a'` and `d'`, if
+- The native bucket is not a self-staking bucket.
+- The native bucket has not been unstaked.
+- `d'` is not smaller than `d`.
+- `a' * n = a + diff`, where `diff` is the value ($IOTX) of the migration transaction.
+The new bucket in system contract will be an auto-staking bucket.
 
 ### Security Considerations
 - Once implemented and deployed, we expect this will increase the staking ratio and the security of the IoTeX blockchain.
