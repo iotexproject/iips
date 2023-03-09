@@ -28,7 +28,7 @@ To support the native representation of staking buckets as NFTs, the high-level 
 ### The Flow
 There are three major components in this proposal: the system contract, the native modification of the staking subprotocol, and a pre-compiled contract to expose delegate and staking info to dApps. The overall flow is listed below where the orange boxes are the new components introduced in this proposal.
 
-![flow](iip-13-flow.jpg)
+![flow](assets/iip-13-flow.jpg)
 
 ### Modification of the Staking Subprotocol
 Modification of the staking subprotocol involves a few native changes such as
@@ -38,7 +38,7 @@ Modification of the staking subprotocol involves a few native changes such as
 Since the main flow will not be changed, limited modifications are needed in staking subprotocol.
 
 ### System Contract
-![state-machine](iip-13-state-machine.jpg)
+![state-machine](assets/iip-13-state-machine.jpg)
 System Contract, deployed and managed by gnosis safe, manages a new set of buckets that have the following attributes:
 - Auto-staking (aka stake-lock) enabled
 - Support a set of bucket types (the amount of IOTX in the bucket and its staking duration), starting with 10,000 IOTX and 30 days 
@@ -54,6 +54,7 @@ Three major functions of the system contract are:
     - Unlock a bucket
     - Waiting for N days to unstake
     - Signal exit (Unstake) and wait for three days to withdraw
+    - Emergency withdrawal is allowed at any time with a penalty
 3. The reward will be sent to the NFT owners from the delegates. The dApp that tokenizes NFT into stIOTX tokens will be responsible to implement the voting strategy, e.g., vote for least-ranked delegate, which specific where the staked IOTX to be delegated to.
 
 #### Interfaces
@@ -73,10 +74,11 @@ function emergencyWithdrawPenaltyRate() external view returns (uint256);
 function isActiveBucketType(uint256 _amount, uint256 _duration) external view returns (bool);
 function numOfBucketTypes() public view returns (uint256);
 function bucketTypes(uint256 _offset, uint256 _size) external view returns (BucketType[] memory types_);
-function readyToWithdraw(uint256 _tokenId) public view onlyValidToken(_tokenId) returns (bool);
-function bucketTypeOf(uint256 _tokenId) external view onlyValidToken(_tokenId) returns (BucketType memory);
-function delegateOf(uint256 _tokenId) external view onlyValidToken(_tokenId) returns (bytes12);
-function votesTo(bytes12[] calldata _delegates) external view returns (uint256[][] memory counts_);
+function blocksToUnstake(uint256 _tokenId) public view onlyStakedToken(_tokenId) returns (uint256);
+function blocksToWithdraw(uint256 _tokenId) public view onlyValidToken(_tokenId) returns (uint256);
+function bucketOf(uint256 _tokenId) external view onlyValidToken(_tokenId) returns (uint256, uint256, uint256, uint256, bytes12);
+function lockedVotesTo(bytes12[] calldata _delegates) external view returns (uint256[][] memory counts_);
+function unlockedVotesTo(bytes12[] calldata _delegates) external view returns (uint256[][] memory counts_);
 ```
 
 ### Pre-compiled Contract To Expose Staking Info
