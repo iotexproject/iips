@@ -35,7 +35,7 @@ This proposal takes a different approach, avoiding any adjustments to the consen
     - Privacy-preserving applications
     - Atomic multi-operations
     - Pay tx fees with XRC20 tokens, allow developers to pay fees for their users, and sponsored transaction use cases more generally
-    - Support aggregated signature (e.g. BLS, Secp256R1)
+    - Support aggregated signature (e.g. BLS, Secp256r1)
 
 ## Specification
 
