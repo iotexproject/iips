@@ -2,7 +2,7 @@
 IIP: 13
 Title: Represent Staking Buckets As Non-fungible Tokens
 Author: Seedlet (zhi@iotex.io)
-Status: WIP
+Status: Approved
 Type: Standards Track
 Category: Core
 Created: 2023-02-22
