@@ -14,7 +14,9 @@ This proposal outlines a plan to bridge the IOTX coin from IoTeX network to Ethe
 
 ## Motivation
 
-While IOTX has been successfully bridged to Binance Smart Chain and Polygon using ioTube and used on those chains for over two years, its legacy ERC-20 version, IOTX-E, has limited supply and low circulating availability on Ethereum. This restricts its usage and potential in DeFi protocols on Ethereum, as well as circulating on some centralized exchanges, with listing of IOTX-E, such as Coinbase, Bittrex. Therefore, we propose introducing CIOTX on Ethereum via ioTube bridge. CIOTX will be fully backed by the circulated IOTX on IoTeX network, thus having enough supply for use in any DeFi app on Ethereum and CEX circulating.
+While IOTX has been successfully bridged to Binance Smart Chain and Polygon using ioTube and used on those chains for over two years, its legacy ERC-20 version, IOTX-E, has limited supply and low circulating availability on Ethereum. This restricts its usage and potential in DeFi protocols on Ethereum, as well as circulating on some centralized exchanges, with listing of IOTX-E, such as Coinbase, Bittrex. Therefore, we propose introducing CIOTX on Ethereum via ioTube bridge. CIOTX will be fully backed by the circulated IOTX on IoTeX network, thus having enough supply for use in any DeFi app on Ethereum and CEX circulating. Below is the price curve for IOTX-E/IOTX:
+
+![price](./assets/iip-21-price.jpeg)
 
 ## Specification
 
