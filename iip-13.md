@@ -59,16 +59,16 @@ Three major functions of the system contract are:
 
 #### Interfaces
 ```
-function stake(uint256 duration, bytes12 delegate) external payable returns (uint256);
-function stake(uint256 amount, uint256 duration, bytes12[] calldata delegates) external payable returns (uint256[] memory);
+function stake(uint256 duration, address delegate) external payable returns (uint256);
+function stake(uint256 amount, uint256 duration, address[] calldata delegates) external payable returns (uint256[] memory);
 function unstake(uint256 tokenId) external onlyStakedToken(tokenId) onlyTokenOwner(tokenId);
 function unlock(uint256 tokenId) external returns (uint256);
 function lock(uint256 tokenId, uint256 duration) external);
 function withdraw(uint256 tokenId, address payable recipient) external onlyTokenOwner(tokenId);
 function extendDuration(uint256 tokenId, uint256 duration) external onlyLockedToken(tokenId) onlyTokenOwner(tokendId);
 function increaseAmount(uint256 tokenId, uint256 amount) external onlyLockedToken(tokenId) onlyTokenOwner(tokendId);
-function changeDelegate(uint256 tokenId, bytes12 delegate) external onlyStakedToken(tokenId) onlyTokenOwner(tokenId);
-function changeDelegates(uint256[] calldata tokenIds, bytes12 delegate) external;
+function changeDelegate(uint256 tokenId, address delegate) external onlyStakedToken(tokenId) onlyTokenOwner(tokenId);
+function changeDelegates(uint256[] calldata tokenIds, address delegate) external;
 function emergencyWithdraw(uint256 tokenId, address payable recipient) external;
 function emergencyWithdrawPenaltyRate() external view returns (uint256);
 function isActiveBucketType(uint256 _amount, uint256 _duration) external view returns (bool);
@@ -76,9 +76,9 @@ function numOfBucketTypes() public view returns (uint256);
 function bucketTypes(uint256 _offset, uint256 _size) external view returns (BucketType[] memory types_);
 function blocksToUnstake(uint256 _tokenId) public view onlyStakedToken(_tokenId) returns (uint256);
 function blocksToWithdraw(uint256 _tokenId) public view onlyValidToken(_tokenId) returns (uint256);
-function bucketOf(uint256 _tokenId) external view onlyValidToken(_tokenId) returns (uint256, uint256, uint256, uint256, bytes12);
-function lockedVotesTo(bytes12[] calldata _delegates) external view returns (uint256[][] memory counts_);
-function unlockedVotesTo(bytes12[] calldata _delegates) external view returns (uint256[][] memory counts_);
+function bucketOf(uint256 _tokenId) external view onlyValidToken(_tokenId) returns (uint256, uint256, uint256, uint256, address);
+function lockedVotesTo(address[] calldata _delegates) external view returns (uint256[][] memory counts_);
+function unlockedVotesTo(address[] calldata _delegates) external view returns (uint256[][] memory counts_);
 ```
 
 ### Pre-compiled Contract To Expose Staking Info
@@ -88,7 +88,6 @@ This pre-compiled contract will be responsible to expose staking information suc
 ```
 function delegates(uint16 _offset, uint16 _size) external view returns (Delegate[]); (function hash 48b4b63d)
 function numOfDelegates() external view returns (uint16); (function hash 13c8852e)
-function lookup(bytes12 _delegate) external view returns (Delegate); (function hash 77b0a032)
 ```
 
 ### An Example of Liquid Staking dApp
