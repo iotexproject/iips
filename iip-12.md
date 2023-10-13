@@ -72,252 +72,57 @@ IoTeX blockchain has its own JSON-RPC API service. When staking transactions are
 
 When IoTeX delegates receive the special staking transaction, It will use the signature in the transaction for verification. However, the hash of the staking transaction can't be directly used to verify the signature of the raw transaction. The staking transaction has to be encoded into the ethereum transaction using the same method mentioned in Part I. Then the hash calculated from the generated raw transaction can be used to verify the signature. 
 
+## Reference Implementation
+
+Since the `Recipient` address `0x04C22AfaE6a03438b8FED74cb1Cf441168DF3F12` is a virtual contract address, native staking actions aren’t supported when interacting from other contracts. However, Ethereum-compatible transactions to API nodes from clients can be translated into native staking actions under this proposal.
+
+Fristly, virtual contract setup:
+
+```jsx
+
+const ethers = require('ethers');
+
+// The Contract interface
+const abi = require("./iip-12-abi.json");
+
+// Connect to the network
+const provider = new ethers.JsonRpcProvider('https://babel-api.mainnet.iotex.io');
+
+// The virtual contract address for native staking
+let contractAddress = "0x04c22afae6a03438b8fed74cb1cf441168df3f12";
+
+// A Signer from a private key
+let privateKey = '';
+let wallet = new ethers.Wallet(privateKey, provider);
+
+// Contract Setup
+let contract = new ethers.Contract(contractAddress, abi, provider);
+```
+
+A list of examples to stake natively:
+
+- Creating a native staking bucket
+
+```jsx
+
+async function createStake() {
+    let tx = await contract.createStake(
+      "",  // Candidate's Name
+      BigInt("100000000000000000000"),  // Stake amount:  Minimum 100 IOTX
+      100, // Number of days 
+      true, // Autostake
+      [] // null
+    );
+    console.log(tx.hash);
+}
+
+createStake();
+```
+
 ## Copyright
 
 Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
 
 ## Appendix
 
-
-`Web3Staking.abi`
-```
-[
-	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "name",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "operatorAddress",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "rewardAddress",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "ownerAddress",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint32",
-				"name": "duration",
-				"type": "uint32"
-			},
-			{
-				"internalType": "bool",
-				"name": "autoStake",
-				"type": "bool"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "candidateRegister",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "name",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "operatorAddress",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "rewardAddress",
-				"type": "address"
-			}
-		],
-		"name": "candidateUpdate",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "candName",
-				"type": "string"
-			},
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "changeCandidate",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "candName",
-				"type": "string"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint32",
-				"name": "duration",
-				"type": "uint32"
-			},
-			{
-				"internalType": "bool",
-				"name": "autoStake",
-				"type": "bool"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "createStake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "depositToStake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint32",
-				"name": "duration",
-				"type": "uint32"
-			},
-			{
-				"internalType": "bool",
-				"name": "autoStake",
-				"type": "bool"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "restake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "voterAddress",
-				"type": "address"
-			},
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "transferStake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "unstake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "uint64",
-				"name": "bucketIndex",
-				"type": "uint64"
-			},
-			{
-				"internalType": "uint8[]",
-				"name": "data",
-				"type": "uint8[]"
-			}
-		],
-		"name": "withdrawStake",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	}
-]
-```
+ABI (iip-12-abi.json) is provided under [assets folder](assets/iip-12-abi.json)
