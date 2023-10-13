@@ -81,7 +81,7 @@ function lockedVotesTo(address[] calldata _delegates) external view returns (uin
 function unlockedVotesTo(address[] calldata _delegates) external view returns (uint256[][] memory counts_);
 ```
 
-for the ABI and source code of the contract, see [iip13-contracts](https://github.com/iotexproject/iip13-contracts).
+For the ABI and source code of the contract, see [iip13-contracts](https://github.com/iotexproject/iip13-contracts).
 
 ### Pre-compiled Contract To Expose Staking Info
 This pre-compiled contract will be responsible to expose staking information such as the number of delegates and who are they, to dApp contracts deployed on the IoTeX blockchain to improve dApps' using experience. This pre-compiled contract will use the address 0x10002.
