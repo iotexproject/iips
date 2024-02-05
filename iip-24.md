@@ -1,7 +1,7 @@
 ```
 IIP: 25
 Title: Raise Block Gas Limit to 50 Million
-Author: Dustin Xie (dustin.xie@iotex.io)
+Author: Coder Zhi (@CoderZhi), Dustin Xie (dustin.xie@iotex.io)
 Forum discussions: https://community.iotex.io/t/iip-24-raise-block-gas-limit-to-50m/11352
 Status: WIP
 Type: Standards Track
@@ -37,6 +37,28 @@ The change aims to boost the IoTeX network's processing capacity. It will be imp
 
 ## Backwards Compatibility
 This feature will be enabled in the upcoming hard-fork, so backward compatibility is maintained.
+
+## Test Cases
+To verify the IIP, tests on IoTeX Testnet with the new setup are necessary:
+1. All nodes should have 8 CPUs and 32GB memory
+2. Modify the block gas limit of all nodes on the Testnet to 50 million
+3. Inject three different types of transactions:
+
+    3.1 Pure transfers without payload, testing the tps upper bound
+
+    3.2 Compute-heavy transactions, testing node processing capabilities
+
+    3.3 A mixture of transfers and transactions, simulating normal cases
+
+Expected results:
+1. Block gas is nearly used up
+2. No delegates miss any blocks
+3. Avergage block mint time and average block validation time are both around 1s or slightly higher
+
+Concerns about storage growth due to the larger block size may arise, so a larger disk size is recommended if necessary.
+
+## Implementation
+A new field will be introduced in the blockchain config, indicating the hard fork height and the new block gas limit value after this hard fork. All delegates should upgrade their nodes before the hard fork.
 
 ## Security Considerations
 This IIP will elevate the IoTeX network's processing capacity to maximum TPS=1000. As discussed above, that number is well in the reach of most delegate's hardware configuration. The entire network's stability is not affected by introducing this IIP.
