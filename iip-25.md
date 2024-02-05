@@ -1,8 +1,8 @@
 ```
-IIP: 22
+IIP: 25
 Title: Delegate Endorsement
 Author: Chen Chen (chenchen@iotex.me)
-Discussions-to: https://community.iotex.io/t/iip-24-delegate-endorsement/11142
+Discussions-to: https://community.iotex.io/t/iip-25-delegate-endorsement/11142
 Status: Draft
 Type: Standards Track
 Category: Core
