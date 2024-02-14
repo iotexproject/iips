@@ -1,6 +1,6 @@
 ```
 IIP: 29
-Title: Support BTC in ioTube
+Title: Bridge Bitcoin to IoTeX via ioTube
 Author: Haixiang (haixiang@iotex.io)
 Status: WIP
 Type: Standards Track
@@ -8,17 +8,21 @@ Created: 2024-02-13
 ```
 
 ## Abstract
-This IIP aims to boost IoTeX's TVL by bridging Bitcoin liquidity to its ecosystem, overcoming native Bitcoin's limitations and the lack of ready-to-deploy bridges. It represents a strategic enhancement, leveraging Bitcoin's market value for IoTeX's benefit.
+
+This IIP proposes a bridge to facilitate the transfer of Bitcoin assets to the IoTeX network, enhancing the network's value and interoperability. It utilizes a multi-signature wallet managed by off-chain witnesses for securing asset on the Bitcoin network. The designed transactions on Bitcoin ensure compatibility with existing IoTeX contracts.
 
 ## Motivation
 
-To bridge liquidity from Bitcoin network, the largest crypto market, to Depin projects on IoTeX L1. This will boost IoTeX's TVL largely with huge assets bridged from Bitcoin network.
+The motivation for this proposal is twofold. First, by bridging Bitcoin to IoTeX, we aim to significantly increase IoTeX's Total Value Locked (TVL) by tapping into the vast assets of the Bitcoin market. This move is expected to enhance the utility and attractiveness of the IoTeX ecosystem to users and depin projects alike. Second, the unique challenges presented by Bitcoin's limited programmability and the lack of open-source bridging solutions necessitate the development of a custom solution. This effort will not only provide IoTeX with a direct link to Bitcoin market but also demonstrate our capability to innovate and expand the blockchain's functionality.
 
-Secondly, limited by its programmability, native BTC isn't as easy as WBTC on ETH network is supported on IoTube. Few Bitcoin bridge projects are open sourced for us to deploy directly. Therefore, it has to be built from scratch.
 
 ## Specification
 
-Legit BTC Transaction format for BTC Bridged to IoTex on ioTube:
+### Legit BTC Transaction format 
+
+#### From sender to mulsig wallet
+
+The `output` Field should be exquisitely constructed for assets bridged to IoTex via ioTube: 
 
 1. Output 1
 
@@ -58,6 +62,11 @@ Amount: A tip to the bridge
 
 Change back to the sender
 
+#### From mulsig wallet to BTC recipient
+
+It is a P2TR transaction from mulsig wallet to BTC recipient
+
+
 ## Rationale
 
 ### Workflow
@@ -79,17 +88,17 @@ With the support of aggregated schnorr signature, Pay-to-Taproot (P2TR) script i
 
 Examples of transactions bridging Satoshi between the Bitcoin testnet and the IoTeX testnet are provided to illustrate the bridge's functionality:
 
-600 satoshis are bridged from bitcoin testnet to iotex testnet
+ - 600 satoshis are bridged from bitcoin testnet to iotex testnet
 
 https://mempool.space/testnet/tx/f7475c55b20babcf8e506f87b3d15e06660435a4116a4b76b911208a2e6177b4
 
-200 satoshis are bridged back to the wallet on bitcoin testnet 
+ - 200 satoshis are bridged back to the wallet on bitcoin testnet 
 
 https://mempool.space/testnet/tx/84105c89eb65f236984dcc4f9781304276099672155f1596b4c8004a12046b58
 
 ## Backward Compatibility
 
-The change will ensure seamless integration with existing infrastructure, including UI/UX enhancements to include a Bitcoin option and compatibility with IoTeX's smart contracts.
+The change will ensure seamless integration with existing infrastructure, including UI/UX enhancements to include a Bitcoin option and compatibility with  the smart contracts on IoTeX.
 
 ## Security Considerations
 
