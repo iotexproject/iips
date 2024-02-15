@@ -13,7 +13,7 @@ This IIP proposes a bridge to facilitate the transfer of Bitcoin assets to the I
 
 ## Motivation
 
-The motivation for this proposal is twofold. First, by bridging Bitcoin to IoTeX, we aim to significantly increase IoTeX's Total Value Locked (TVL) by tapping into the vast assets of the Bitcoin market. This move is expected to enhance the utility and attractiveness of the IoTeX ecosystem to users and depin projects alike. Second, the unique challenges presented by Bitcoin's limited programmability and the lack of open-source bridging solutions necessitate the development of a custom solution. This effort will not only provide IoTeX with a direct link to Bitcoin market but also demonstrate our capability to innovate and expand the blockchain's functionality.
+The motivation for this proposal is twofold. First, by bridging Bitcoin to IoTeX, we aim to significantly increase IoTeX's Total Value Locked (TVL) by tapping into the vast assets of the Bitcoin market. This initiative aims to enhance the appeal and functionality of the IoTeX ecosystem for IoTeX users, while also indirectly engaging Bitcoin users in the development of DEPIN projects and ecosystems. By doing so, it seeks to significantly increase liquidity across these projects. Establishing the IoTeX network as a fundamental hub for DEPIN project liquidity is identified as one of its key roles. Second, the unique challenges presented by Bitcoin's limited programmability and the lack of open-source bridging solutions necessitate the development of a custom solution. This effort will not only provide IoTeX with a direct link to Bitcoin market but also demonstrate our capability to innovate and expand the blockchain's functionality.
 
 
 ## Specification
