@@ -47,10 +47,11 @@ The ETH ADDR of receiver is encoded in the binary data:
 | Data byte         | 1                              | Uint8       | 1                      |
 | Index of Transfer | index in LittleEndian          | Uint32      | 4                      |
 | Token Recipient   | Address of wrapped btc mint to | ETH Address | 20                     |
-| Total             |                                |             | 32                     |
+| Index of Tip      | index in LittleEndian          | Uint32      | 4                      |
+| Total             |                                |             | 36                     |
 
 
-The expected length of PkScript is 33.
+The expected length of PkScript is 37.
 
 3. Output 3
 
@@ -90,7 +91,7 @@ Examples of transactions bridging Satoshi between the Bitcoin testnet and the Io
 
  - 600 satoshis are bridged from bitcoin testnet to iotex testnet
 
-https://mempool.space/testnet/tx/f7475c55b20babcf8e506f87b3d15e06660435a4116a4b76b911208a2e6177b4
+https://mempool.space/testnet/tx/8775c76728b87c4814f9e88f85bd5e84f5c5b2592720017869c73aee6682bbbb
 
  - 200 satoshis are bridged back to the wallet on bitcoin testnet 
 
