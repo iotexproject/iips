@@ -42,9 +42,9 @@ The ETH ADDR of receiver is encoded in the binary data:
 
 |                   | Content                        | Type        | Data Length (in Bytes) |
 |-------------------|--------------------------------|-------------|------------------------|
-| Opcode            | OP_DATA_31                     |      -      | 1                      |
+| Opcode            | OP_DATA_35(0x23)               |      -      | 1                      |
 | Protocol Name     | "iotube"                       | String      | 6                      |
-| Data byte         | 1                              | Uint8       | 1                      |
+| Data byte         | 1(0x01)                        | Uint8       | 1                      |
 | Index of Transfer | index in LittleEndian          | Uint32      | 4                      |
 | Token Recipient   | Address of wrapped btc mint to | ETH Address | 20                     |
 | Index of Tip      | index in LittleEndian          | Uint32      | 4                      |
