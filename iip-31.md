@@ -12,7 +12,7 @@ The proposal details the integration of Solana with the ioTube bridge, enhancing
 
 ## Motivation
 
-After integrating into EVM and Bitcoin ecosystem, Solana ecosystem is the next milestone for ioTube bridge. Bridging Solana and IoTeX chains will enhance interoperability between two leading DEPIN ecosystems, enabling seamless transfer of assets, data, and services. Enhanced interoperability will attract a broader user base, driving adoption and network effects while promoting the overall growth of the DEPIN sector. Additionally, as one of the public goods of IoTeX ecosystem, ioTube bridge is evolving to create a more interconnected and impactful DEPIN ecosystem, aligning with our mission of "DePIN for Everyone."
+After integrating into EVM and Bitcoin ecosystem, Solana ecosystem is the next milestone for ioTube bridge. Bridging Solana and IoTeX chains will enhance interoperability between two leading DEPIN ecosystems, enabling seamless transfer of assets, data, and services. Once this bridge is complete, Solana DePIN tokens will be able to be bridged to the IoTeX L1. This allows Solana DePINs to expand their reach and benefit from IoTeX's large, global community. As an example of this, IoTeX's Liquidity Hub on the mimo DEX has had great success creating new liquidity pools for DePIN tokens on other chains (Polygon, Ethereum) and we look forward to offering this benefit to Solana DePIN projects. Enhanced interoperability will attract a broader user base, driving adoption and network effects while promoting the overall growth of the DEPIN sector. Additionally, as one of the public goods of IoTeX ecosystem, ioTube bridge is evolving to create a more interconnected and impactful DEPIN ecosystem, aligning with our mission of "DePIN for Everyone."
 
 
 ## Specification
@@ -71,7 +71,8 @@ Solana-IoTeX bridge, leveraged on the [ioTube Bridge architecture](https://docs.
 
 ### Workflow
 
-WIP
+![whiteboard_exported_image](https://github.com/iotexproject/iips/assets/55118568/c7520d37-8bc6-4618-a9b3-263ac44f84e8)
+
 
 ### Ed25519 Elliptic Curve
 
