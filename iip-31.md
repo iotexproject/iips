@@ -31,7 +31,7 @@ pub fn process_bridge(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64
  - Method on IoTex Chain:
  
 ```solidity
-function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable`
+function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable
 ```
 
 ### Methods of Receiving Assets
@@ -40,13 +40,13 @@ These methods allow off-chain relayers of the bridge to submit proofs, confirmed
  - Method on Solana Chain:
 
 ```rust
- pub fn process_settle(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -> ProgramResult`
+ pub fn process_settle(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -> ProgramResult
 ```
 
  - Method on IoTex Chain:
 
 ```solidity
-function submit(address cashier, address tokenAddr, uint256 index, address from, address to, uint256 amount, bytes memory signatures) public whenNotPaused` 
+function submit(address cashier, address tokenAddr, uint256 index, address from, address to, uint256 amount, bytes memory signatures) public whenNotPaused 
 ```
 
 ## ioTube Message Protocol 
