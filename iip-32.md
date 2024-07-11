@@ -15,7 +15,7 @@ This IIP proposes a new system staking contract, which is an ERC721 contract. Ea
 ## Motivation
 The most commonly used buckets in IoTeX blockchain are native staking buckets. The native staking buckets are restricted in terms of tradability, as the native protocol does not support very complicated operations. This limitation reduces liquidity and restricts the potential use cases of staked assets in the DeFi ecosystem.
 
-Different from the previous version of system staking contract, in which investors could only choose some specific staking amounts and durations, this version allows investors to create buckets of any amount and any duration. We are able to implement a very straightforward migration from the native staking buckets to the new NFT based buckets. 
+Different from the previous version [IIP13](https://github.com/iotexproject/iips/blob/master/iip-13.md), in which investors could only choose some specific staking amount and duration combinations, this version allows investors to create buckets of any amount and any duration, as long as the amount is not less than a minimum value and the duration is not larger than a maximum value. With the same attribute restriction as the native staking buckets, the migration from the native staking buckets to the new NFT based buckets is easy to implement.
 
 The new staking contract will:
 * Improve accessibility: The ability to trade staking buckets lowers the entry barriers for new investors and allows for more efficient capital allocation within the ecosystem.
