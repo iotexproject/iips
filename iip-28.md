@@ -10,11 +10,11 @@ Created: 2024-06-01
 
 ## Abstract
 
-This IIP introduces the "Transfer Delegate Ownership" feature to the IoTeX ecosystem. The proposed feature aims to provide delegate owners with the ability to change a delegate's profile address to a new one, offering various benefits, including the option to sell their delegate business, transition between wallet setups, and enhance security by addressing potential account compromises.
+This IIP introduces the "Transfer Delegate Ownership" feature to the IoTeX L1. The feature allows delegate owners to change a delegate's profile address to a new one. This offers several benefits, including the ability to transfer their delegate business to another entity, switch between wallet setups, and improve security by addressing potential account compromises.
 
 ## Motivation
 
-The motivation behind the "Transfer Delegate Ownership" feature is to offer increased flexibility and security to delegate owners within the IoTeX network. Currently, there is no mechanism to update a delegate's profile address once it is set up. This limitation hinders the ability to adapt to changing circumstances, such as transferring a delegate to a new owner, transitioning between wallet setups (e.g., Ledger native app to Metamask), or responding to security concerns arising from a compromised profile account.
+The motivation behind this feature is to offer increased flexibility and security to delegate owners of the IoTeX L1. Currently, there is no way to update a delegate's profile address once it is set. This limitation hinders adapting to changing circumstances, such as transferring a delegate to a new owner, switching between wallet setups (e.g., Ledger native app to Metamask), or addressing security concerns from a compromised profile account.
 
 ## Overview
 
@@ -25,10 +25,10 @@ The "Transfer Delegate Ownership" feature will allow delegate owners to change t
 
 ## Specification
 
-The ownership transfer will be implemented by sending a new type of transaction to the IoTeX network, and protocol stack will process this transaction to validate the action. For the delegate who intends to do so, he first constructs a message that articulates his intention:
+The ownership transfer will be implemented by sending a new type of transaction to the IoTeX L1. This will validate the transaction and apply the state change it indicates. For the delegate who intends to transfer ownership, they first construct a message that articulates their intention:
 
 ### Delegate ID
-We have introduced a new field ID as the unique identifier for delegate. It is determined when the node is created (equal to the owner address) and remains unchanged thereafter. The voting address for the stake bucket needs to be set to the ID, rather than the owner.
+We introduce a new field ID as the unique identifier for delegate. It is determined when the node is created (equal to the owner address) and remains unchanged thereafter. The voting address for the stake bucket needs to be set to the ID, rather than the owner.
 ```
 type Delegate {
     Name string
@@ -41,7 +41,7 @@ type Delegate {
 ```
 
 ### Ownership Transfer Transaction
-We also have introduced a new type of transaction that allows node owners to transfer ownership through this transaction.
+We also introduce a new type of transaction that allows node owners to transfer ownership through this transaction.
 ```
 type transferOwner struct {
     NewOwner address.Address // the new owner address
