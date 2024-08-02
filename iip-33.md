@@ -1,6 +1,7 @@
 ```
 Title: The DePIN DAO
 Authors: Qevan Guo, Andrew Law
+Forum discussion: https://community.iotex.io/t/iip-33-the-depin-dao/12323
 Status: Draft
 Type: Standards Track
 Category: Core
