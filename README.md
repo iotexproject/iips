@@ -68,6 +68,25 @@ marked with `*` are optional and are described below. All other headers are requ
 
 Refer to the [example](iip-X.md) for details.
 
+## Process of creating a new IIP
+
+1) Review the IIPs public repo
+This will help you ensure that your idea is unique and has not already been proposed or discussed. It will also give you an idea of the standard of other successful proposals. 
+
+2) Determine the next IIP number: To avoid conflicts, find the current latest IIP and use the next number for your proposal (don't forget to check any PRs with pending proposals).
+
+3) Draft your proposal: Try using the same format as the existing IIP documents you find the repository to draft yours. When in doubt, feel free to reach out to any IoTeX team member on Discord, on X,  Telegram, or on the community forum. Not sure where to look? 
+Start here:  https://iotex.io
+
+4) Submit for discussion: Once your proposal is ready, post it to the IoTeX Community Forum for discussion under the Governance Proposals category: https://community.iotex.io/c/governance-proposals
+
+5) Voting and implementation: Based on the feedback received, you may need to make revisions to your proposal. Once the IIP is finalized, it will go through community voting on the IoTeX snapshot: 
+ https://snapshot.org/#/iotex.eth
+
+6) Implementation: Once the voting is passed, it will be implemented into the relevant IoTeX ecosystem protocol.
+
+
+
 ## Acknowledgement
 
 Thanks for those who contribute to [BIPs](https://github.com/bitcoin/bips), [EIPs](https://github.com/ethereum/EIPs)
