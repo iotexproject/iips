@@ -2,7 +2,7 @@
 IIP: 14
 Title: Account Abstraction via EntryPoint Contract
 Author: Leo (leo@iotex.io)
-Status: WIP
+Status: Living
 Type: Standards Track
 Category: Core
 Created: 2023-03-09
