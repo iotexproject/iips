@@ -1,6 +1,6 @@
 ```
 - Title: IIP-48: A Unified Token Standard for the IoTeX Network
-- Author: Qevan Guo
+- Author: Qevan Guo & Giuseppe De Luca
 - Status: Draft
 - Type: Standards Track
 - Category: Token / Governance
