@@ -15,7 +15,9 @@ This proposal advocates reducing the block interval of the IoTeX blockchain from
 ## Motivation
 
 **High Latency Concerns**: The current 5-second block interval is suboptimal for applications requiring near-instant finality, such as gaming, DeFi arbitrage, and micropayments in DePIN ecosystems.
+
 **Competitive Benchmarking**: Leading Layer-1 blockchains (e.g., Solana, Avalanche, BSC) and Layer-2 solutions (e.g., Polygon PoS) have adopted sub-3-second intervals, setting user expectations for faster confirmations. Retaining a 5-second interval risks ecosystem migration to faster chains.
+
 **DePIN Requirements**: IoTeX's focus on machine-economy and DePIN applications necessitates faster transaction processing for device-to-device interactions and real-time data transmission scenarios.
 
 ## Specification
