@@ -1,7 +1,7 @@
 ```
 IIP: 42
-Title: Reduce Block Interval to 3 Seconds
-Author: Chen Chen ((chenchen@iotex.me))
+Title: Reduce Block Interval to 3 Seconds for IoTeX L1
+Author: Chen Chen (chenchen@iotex.io) Zhi (zhi@iotex.io) Raullen Chai (raullen@iotex.io)
 Status: Draft
 Type: Standards Track
 Category: Core
@@ -10,21 +10,27 @@ Created: 2025-03-20
 
 ## Abstract
 
-This proposal advocates reducing the block interval of blockchain from 5 seconds to 3 seconds through consensus parameter optimization and network-layer enhancements. By shortening the block interval, the network aims to achieve higher transaction throughput, lower latency for transaction finality, and improved user experience, particularly for latency-sensitive applications.
+This proposal advocates reducing the block interval of the IoTeX blockchain from 5 seconds to 3 seconds through targeted consensus parameter optimization and network-layer enhancements. By shortening the block interval, the network aims to achieve lower latency for transaction finality, and improved user experience, particularly for latency-sensitive applications in DeFi and DePIN (Decentralized Physical Infrastructure Networks).
 
 ## Motivation
 
-Addressing User and Developer Demands
-- High Latency Concerns: The current 5-second block interval is suboptimal for applications requiring near-instant finality, such as gaming, DeFi arbitrage, and IoT microtransactions.
-- Competitive Benchmarking: Leading Layer-1 blockchains (e.g., Solana, Avalanche, BSC) and Layer-2 solutions (e.g., Polygon PoS) have adopted sub-3-second intervals and even shorter, setting user expectations for faster confirmations. Retaining a 5-second interval risks ecosystem migration to faster chains.
+**High Latency Concerns**: The current 5-second block interval is suboptimal for applications requiring near-instant finality, such as gaming, DeFi arbitrage, and micropayments in DePIN ecosystems.
+**Competitive Benchmarking**: Leading Layer-1 blockchains (e.g., Solana, Avalanche, BSC) and Layer-2 solutions (e.g., Polygon PoS) have adopted sub-3-second intervals, setting user expectations for faster confirmations. Retaining a 5-second interval risks ecosystem migration to faster chains.
+**DePIN Requirements**: IoTeX's focus on machine-economy and DePIN applications necessitates faster transaction processing for device-to-device interactions and real-time data transmission scenarios.
 
 ## Specification
 
-### Consensus Params
+### Consensus Parameter Adjustments
 
-**Block Interval**
+**Block Interval Redistribution**
 
-The consensus process in each round is divided into four stages: Propose, Endorsement, Lock, and Commit. Currently, each block interval is 5 seconds. We propose to reduce the time of the Propose and Lock stages in order to lower the overall block interval to 3 seconds.
+The consensus process in IoTeX's DPOS-like mechanism is divided into four stages: Propose, Endorsement, Lock, and Commit. Currently, the block interval is 5 seconds. We propose to reduce the processing time allocated to the each stage to lower the overall block interval to 3 seconds.
+The time allocation will be modified as follows based our optimization and benchmarking:
+- Propose stage: Reduced from 2 seconds to 1 second
+- Endorsement stage: Remains at 1 second
+- Lock stage: Reduced from 1 second to 0.5 seconds
+- Commit stage: Reduced from 1 second to 0.5 seconds
+- Total: 3 seconds
 
 | Stage    | Propose    | Endorsement    | Lock    | Commit    |
 |---|---|---|---|---|
@@ -32,75 +38,72 @@ The consensus process in each round is divided into four stages: Propose, Endors
 | TTL (5s)    | 2s    | 1s    | 1s    | 1s    |
 | TTL (3s)    | 1s    | 1s    | 0.5s    | 0.5s    |
 
-**Epoch**
+**Epoch Restructuring**
 
-The number of delegates (num_delegates) is 24, and the number of sub-epochs (num_sub_epochs) is changed from 30 to 50, so that each epoch will include 1,200 blocks (originally 720 blocks), still lasting for 1 hour.
+- Delegates: Fixed at 24.
+- Sub-Epochs: Increased from 30 to 50 per epoch.
+- Blocks per Epoch: Increased from 720 to 1,200 blocks, maintaining a 1-hour epoch duration (1,200 × 3s = 3,600s).
 
-**Block Gas Limit**
+**Gas Limit Adjustment**
 
-The block gas limit is reduced from 50 million to 30 million.
+- Block Gas Limit: Reduced from 50M to 30M
+- Effective Throughput: Maintained at 10M gas/second (30M ÷ 3s = 10M/s).
 
-### Optimistic Mint
+### Optimistic Block Minting
 
-- Optimistic Mint: when a delegate receives a proposal (P1), if it's the proposer of the next round, it can prepare the next proposal (P2) in advance without waiting for P1 to be confirmed.
+To ensure blocks can be produced reliably within the shorter time interval, we introduce an optimistic block minting mechanism:
+
+- **Proactive Proposal Preparation**: Once receiving a valid proposal of current block (P1), the next proposer will start preparing the proposal for the next block (P2). When the next round starts, the pre-prepared P2 will be broadcasted right away. Consequently, delegates receiving P2 will have a longer time to validate the proposal.
 
 ![optimistic-mint](./assets/iip-42-optimistic-mint.png)
 
-- Fallback: If consensus is not reached in a certain round, then fallback to mint proposal at next round start
+- **Fallback Process**: If consensus fails in a certain round(N, 0), delegates discard the optimistic proposal(N+1, 0), and restart the next round(N, 1) within 1 second for proposal.
 
 ![fallback-mint](./assets/iip-42-mint-fallback.png)
 
-- Max-Mint-Time: The time limit for preparing the next proposal should not exceed 1 second, in order to avoid that proposal being too large and unable to complete the subsequent consensus stages in a timely manner.
+- **Max-Mint-Time**: The time limit for preparing the next proposal must not exceed 1 second, ensuring that the proposal can complete subsequent consensus stages within the allotted time frame.
+
+By introducing optimistic minting, the actual total duration of the proposal stage and the endorsement stage now is 4 seconds, which is longer than the previous 3 seconds. This indicates that we have ensured adequate processing time while reducing the block interval, thereby maintaining network stability under high load.
+
+### Reward Recalibration
+
+To maintain the same token emission per epoch, the rewards to delegates will be adjusted as follows:
+- Epoch Reward: Because the duration of an epoch is the same as before, the epoch reward won't be changed.
+- Block Reward: The total block reward per epoch, 5,760 IOTX (8 IOTX/block * 720 block), will be evenly distributed to the 1,200 blocks. Such that the reward per block will be adjusted to$$8 * 720 / 1200 = 4.8$$IOTX.
 
 ### System Staking Changes
+
+The reduction in block intervals has had a certain impact on the staking contracts. Since the staking duration in the system is recorded based on block numbers, this results in issues such as early withdrawal and a reduced maximum staking duration. To address these problems, we have made the following changes:
+
 #### V1 Staking Contract - Add bucket types
-Add three bucket types:
+Add three bucket types to re-enable 91 days staking:
 - 10,000 IOTX , 2,620,800 blocks (91 days)
 - 100,000 IOTX, 2,620,800 blocks
 - 1,000,000 IOTX, 2,620,800 blocks
 
-#### V2 Staking Contract - Not recommend any more
-- New Stakes are not allowed after hardfork
-- Existed buckets are only allowed to withdraw or migrate to v3 contract
+#### V2 Staking Contract - Deprecate
+
+- V2 staking will be deprecated in products(e.g. [Staking Portal](https://stake.iotex.io/) and [ioPay](https://iopay.me/))
+- New Stakes do not have voting weights any more
+- Existed Stakes are allowed to unstake or migrate to v3 contract
 
 #### Introduce V3 Staking Contract
 To fundamentally address the issue of changes in the block interval causing the duration of old contracts to also change, we are introducing a v3 staking contract.
 
-**Timestamp Based Duration**
-
-The main change in v3 is that the staking duration is calculated using natural timestamps instead of block numbers.
-
-**Legacy Migration**
-
-Another feature is the support for migrating v2 buckets to v3, allowing for a one-to-one exchange.
-- Only the bucket owner, and only when it is in a locked state, can perform the migration.
-- The original bucket's owner is changed to the v3 contract address, while the voting rights are directed to a null address.
-- A v3 bucket will be generated owned by the staker, with the amount and delegate of the new bucket being the same as the original bucket, and the duration calculated based on the original bucket's duration multiplied by 5 seconds.
+- **Timestamp Based Duration**: The main change in v3 is that the staking duration is calculated using natural timestamps instead of block numbers.
+- **Legacy Migration**: Another feature is the support for migrating v2 buckets to v3, allowing for a one-to-one exchange.
+  - Only the bucket owner, and only when it is in a locked state, can perform the migration.
+  - The original bucket's owner is changed to the v3 contract address, while the voting rights are directed to a null address.
+  - A v3 bucket will be generated owned by the staker, with the amount and delegate of the new bucket being the same as the original bucket, and the duration calculated based on the original bucket's duration multiplied by 5 seconds.
 
 #### Native Migration
 After the hard fork, the buckets generated by the native migration action will also be changed to the v3 contract.
 
 ### Rationale
 
-#### Will shortening the block interval lead to the inability to reach consensus?
-
-Shortening the block interval intuitively seems to reduce the robustness of the network in reaching consensus under high-load conditions to some extent. However, in practice, there are currently idle resources. The actual network performance is as follows:
-
-| Percentile | TPS | Block Gas | Statistic Metrics |
-|---|---|---|---|
-|    |    |    | Mint    | P2P Latency | Validate | Commit (Stage) | Propose Stage (mint + broadcast) |
-| P50    | 25    | 1m    | 80ms    | 50ms    | 80ms    | 200ms    | 130ms    |
-| P95    | 80    | 8m    | 500ms    | 120ms    | 340ms    | 500ms    | 620ms    |
-
-
-- Under normal circumstances, consensus can still be reached in a timely manner after lowering the block interval
-- If the block gas limit needs to be fully utilized, it can be achieved by upgrading the delegate hardware resource
-
-Additionally, the introduction of the optimistic mint mechanism provides delegates with ample time to complete mint and broadcast. In most cases, this enhances the robustness of the network compared to the previous 2-second time frame.
-
 #### Impacts on Legacy System Staking Contracts
 
-In the Quebec upgrade, we introduced the Staking Contract (v1: 0x68db92a6a78a39dcaff1745da9e89e230ef49d3d) to unlock liquidity staking. In the Upernavik upgrade, we introduced the Native Staking Migration feature. Due to the limitations on staking types in the v1 contract, we also introduced the v2 contract (0x8ee521d2179576bcc4bd33a00904e96a11678052) to facilitate a smooth migration experience. 
+In the [Quebec Upgrade](https://github.com/iotexproject/iotex-core/releases/tag/v1.11.0), we introduced the Staking Contract (v1: 0x68db92a6a78a39dcaff1745da9e89e230ef49d3d) to unlock liquidity staking. In the [Upernavik Upgrade](https://github.com/iotexproject/iotex-core/releases/tag/v2.0.0), we introduced the Native Staking Migration feature. Due to the limitations on staking types in the v1 contract, we also introduced the v2 contract (0x8ee521d2179576bcc4bd33a00904e96a11678052) to facilitate a smooth migration experience.
 
 Currently, both versions are in use. The v1 version has been integrated into dapps such as uniIOTX, while the v2 version is only used by retail users.
 
@@ -112,20 +115,37 @@ Block interval reduction impacts these two staking contracts,  since the contrac
   - For v2, the maximum staking duration has been reduced from 36 months to around 21.6 months. 
   - For v1, it has been reduced from 91 days to 54 days
 
-### Backward Compatibility
-What should legacy contract stakers do?
+## Backward Compatibility
 
-For v1 stakers:
-  - If you are not concerned about the reduction in duration, there is nothing you need to do; it will continue to work normally.
-  - If you want to restore the original duration, simply modify the bucket type to the newly added staking type with a duration of 91 days.
+**Legacy Staking Contracts**
 
-For v2 stakers:
-  - It is strongly recommended for stakers to migrate to  v3, so that the staking duration will remain consistent with the past.
-  - v2 is still working for existing buckets, but only allowed withdrawal. There are some drawbacks:
-    - v2 only supports a maximum duration of 21.6 months.
-    - It will be affected again when the block interval is adjusted in the future.
+Due to the impact on legacy staking, we recommend users to take the following actions to avoid issues:
+- V1 Contract: stakers can send ExpandBucket transaction to change duration to 2,620,800 blocks, re-enabling 91 days staking
+- V2 Contract: Staker has two options
+  - Send Unstake transaction to withdraw your IOTX
+  - Send Migrate transaction to transmit your assets to the v3 contract
 
-### Security Considerations
+## Security Considerations
+
+**Network Stability**
+
+- The risk of increased consensus failures has been mitigated through the optimistic mint mechanism
+- Comprehensive monitoring tools will be deployed to track consensus performance
+- A rollback mechanism has been prepared in case of unexpected network behavior
+
+**Delegate Requirements**
+
+- Minimum hardware and bandwidth specifications for delegates will be updated to ensure reliable performance
+- Monitoring systems will identify delegates who consistently lag in consensus participation
+
+**Smart Contract Auditing**
+
+- All modified contracts have undergone formal verification and comprehensive auditing and testing
+- The v3 staking contract will be audited right away by [Independent Security Firm]
+- Migration paths have been tested extensively to ensure data integrity during transitions
+
+## Integrations and Rollout
+This feature will be rolled out in v2.2.0, which is expected by the end of April, 2025. Before the release, it is necessary to complete the integration preparation for the related products, e.g., Staking Portal, ioPay, IoTeX Explorer, and third party products.
 
 ## Copyright
 
