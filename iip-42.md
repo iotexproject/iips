@@ -1,6 +1,6 @@
 ```
 IIP: 42
-Title: Reduce Block Interval to 2.5 Seconds for IoTeX L1
+Title: Halving Blocktime and Doubling the TPS of the IoTeX L1
 Author: Chen Chen (chenchen@iotex.io) Zhi (zhi@iotex.io) Raullen Chai (raullen@iotex.io)
 Status: Draft
 Type: Standards Track
