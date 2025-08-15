@@ -1,6 +1,6 @@
 ```
 IIP: 50
-Title: Slash Under-performed Delegates
+Title: Slash Underperforming Delegates
 Author: Chen Chen (chenchen@iotex.io) Zhi (zhi@iotex.io) Raullen Chai (raullen@iotex.io)
 Status: Draft
 Type: Standards Track
@@ -10,7 +10,7 @@ Created: 2025-07-02
 
 ## Abstract
 
-Currently, IoTeX uses a probation system to exclude underperformed delegates from consensus participation for a period of time. While this mechanism helps maintain network quality, it lacks economic penalties that could further incentivize proper node maintenance. This proposal introduces a reasonable penalty on the staked principal of delegates who fail to meet consensus participation requirements, creating stronger economic incentives for delegates to maintain reliable infrastructure.
+Currently, IoTeX uses a probation system to exclude underperforming delegates from consensus participation for a period of time. While this mechanism helps maintain network quality, it lacks economic penalties that could further incentivize proper node maintenance. This proposal introduces a reasonable penalty on the staked principal of delegates who fail to meet consensus participation requirements, creating stronger economic incentives for delegates to maintain reliable infrastructure.
 
 ## Motivation
 
