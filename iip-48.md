@@ -1,87 +1,128 @@
 ```
-- Title: IIP-48: A Unified Token Standard for the IoTeX Network
-- Author: Qevan Guo & Giuseppe De Luca
+- Title: "IIP-48: CIOTX – A Unified Cross-Chain Token Standard for the IoTeX Network"
+- Author: Qevan Guo, Chen Chen, Seedlet
 - Status: Draft
 - Type: Standards Track
 - Category: Token / Governance
 - Created: 2025-02-12
+- Updated: 2025-06-05
 ```
-
-
-# Abstract
-The IoTeX ecosystem currently features multiple representations of the IOTX token, leading to user confusion and integration complexity. This proposal aims to unify IOTX into a single, canonical token across major Layer 1 / Layer 2 (L1/L2) blockchains, including Ethereum mainnet. The plan involves retiring CIOTX, retiring the ERC20 IOTX on Ethereum, and introducing a unified IOTX token that will be interconnected via the IoTeX bridge (iotube) to all supported chains. The total supply of the IOTX Unified Token will be based on the native IOTX on the IoTeX network, which has a total supply of 10 billion.
-
-To ensure a smooth transition, IoTeX will collaborate with exchanges and dApps to migrate existing tokens to the unified standard over six months. Following this period, the legacy ERC20 IOTX token will be retired, with all ERC20 IOTX convertible to the unified IOTX token at a 1:1 ratio.
 
 ---
 
-# Motivation
+## **Abstract**
+
+The IoTeX ecosystem currently features multiple representations of the IOTX token, leading to user confusion and integration complexity. This proposal aims to unify IOTX into a single, canonical token across major Layer 1 / Layer 2 blockchains, including Ethereum mainnet, Base and Solana, to name a few.
+
+This proposal formalizes **CIOTX** as the standard cross-chain representation of IOTX. CIOTX has been in use across multiple chains and functions effectively as a unified token, differing primarily in name. It is already deployed via trusted bridging infrastructure such as ioTube and Wormhole.
+
+IIP-48 will serve as **Phase 1** of the unification. A future IIP will introduce **Phase 2** which will involve the introduction of a new unified token to consolidate all IOTX variants across chains.
+
+---
+
+## **Motivation**
+
 Multiple versions of the IOTX token currently exist within the ecosystem:
 
-- **Native IOTX**: The primary token on IoTeX L1, widely traded on major exchanges (Binance, KuCoin, Gate, MEXC, etc.).
-- **WIOTX**: The wrapped IOTX token (XRC20 format) used for DeFi and on-chain applications.
-- **Legacy ERC20 IOTX**: An older Ethereum-based IOTX token, listed on Coinbase & Gemini. While 87% of the total supply has been burned and it remains 1:1 convertible to native IOTX, price discrepancies arise due to its limited availability on Ethereum.
-- **CIOTX (Crosschain IOTX)**: A bridge-based version of IOTX deployed on multiple chains (Polygon, BSC, Ethereum) for cross-chain functionality.
+* **Native IOTX**: The native token on IoTeX L1, required to pay gas for mainnet transactions, widely traded on major exchanges (Binance, KuCoin, Gate, MEXC, etc.).
+
+* **WIOTX**: The wrapped IOTX token (XRC20 format) used for DeFi and dApps on the IoTeX L1 blockchain.
+
+* **ERC20 IOTX**: The legacy ERC20 IOTX token on the Ethereum blockchain, listed on Coinbase & Gemini exchanges. While 87% of the total supply has been burned during mainnet launch, it remains 1:1 convertible to native IOTX, but price discrepancies arise due to its limited availability on Ethereum.
+
+* **CIOTX (Crosschain IOTX)**: A bridge-based version of IOTX deployed on multiple chains (Polygon, BSC, Ethereum) for cross-chain functionality.
 
 This fragmented structure creates market inefficiencies, complicates liquidity distribution, and increases the technical burden for developers and users. A unified token standard will enhance ecosystem clarity, improve liquidity, and streamline user experience.
 
 ---
 
-# Specification
+## **Token Unification Strategy**
 
-## 1. Token Unification Strategy
+##### **A. Formal Adoption of CIOTX as the Cross-Chain Token Standard**
 
-### 1.1 CIOTX Replacement with a Unified IOTX Token
-- CIOTX, while enabling cross-chain transfers, introduces unnecessary complexity and liquidity fragmentation.
-- It will be replaced by a unified IOTX token deployed on major L1s/L2s, including Ethereum mainnet, Base, Polygon, and Solana.
-- The unified token will have the following properties:
-  - **Symbol/Ticker**: IOTX
-  - **Name**: IoTeX Network Token (Unified)
+CIOTX has been actively used to enable cross-chain IOTX transfers across ecosystems like Ethereum, BSC, Polygon, and Solana. This proposal formalizes CIOTX as the **canonical cross-chain representation** of IOTX.
 
-### 1.2 Migration Plan with Exchanges and dApps
-- **Action**: Coordinate with major exchanges, wallet providers, and dApp developers to integrate the unified IOTX token.
-- **Rationale**: A structured migration will ensure minimal disruption while consolidating liquidity.
+##### **B.** **dApp** **and Exchange Coordination**
 
-### 1.3 Replenish Liquidity for IOTX on Mainstream L1s
-- **Action**: Partner with liquidity providers and cross-chain bridge operators to maintain deep liquidity for the unified IOTX token on Ethereum, Solana, Base, Polygon, and BSC.
-- **Rationale**: Strong liquidity will drive adoption, enable efficient price discovery, and reduce slippage.
+**Action:** Coordinate with major exchanges, wallet providers, indexers, and dApp developers to adopt CIOTX as the primary multichain representation of IOTX. **Rationale:** Standardizing CIOTX across platforms ensures a unified user experience and reduces the complexity of managing multiple IOTX variants.
 
-### 1.4 Retire Legacy ERC20 IOTX
-- **Action**: Once migration is complete, deprecate the ERC20 IOTX token.
-- **Rationale**: The legacy ERC20 IOTX, due to its reduced supply and deviation from a 1:1 peg, causes confusion and inefficiencies. Retiring it will streamline the token ecosystem.
+##### **C. Expand and Rebalance CIOTX Liquidity**
 
----
+**Action:** Collaborate with liquidity providers, DeFi protocols, and bridge operators to expand and rebalance CIOTX liquidity on supported chains, including Solana (Raydium), Base (Uniswap), and Polygon (Quickswap). **Rationale:** Consolidated liquidity around CIOTX improves price discovery, reduces slippage, and promotes seamless multichain DeFi participation.
 
-## 2. Implementation Details
+##### **D. Legacy ERC20 IOTX Token (Phase 2 Outlook)**
 
-### 2.1 Smart Contract and Bridge Adjustments
-- Deploy the IOTX unified token on Ethereum mainnet and facilitate CIOTX conversions.
-- Expand deployments to popular Ethereum Layer 2 solutions via L2 bridges.
-- Deploy the IOTX unified token on Solana using the Wormhole bridge.
-- Work with major cross-chain bridges to ensure broad compatibility.
+**Action:** While ERC20 IOTX remains widely held (e.g., on Coinbase), its long-term future should be discussed with the community and exchange partners. **Rationale:** ERC20 IOTX lacks a consistent 1:1 peg to native IOTX, leading to pricing discrepancies and market confusion. A potential retirement or migration path may be proposed in a future phase, pending consensus.
 
-### 2.2 Migration Tools
-- **User Interface**:
-  - Develop a migration dApp allowing CIOTX and legacy ERC20 IOTX holders to swap to the unified IOTX token at a 1:1 ratio.
+<!--br {mso-data-placement:same-cell;}--> td {white-space:nowrap;border:0.5pt solid #dee0e3;font-size:10pt;font-style:normal;font-weight:normal;vertical-align:middle;word-break:normal;word-wrap:normal;}
+
+|Chain|Token|DEX|Bridge|Explorer|
+| --- | --- | --- | --- | --- |
+|Ethereum|CIOTX|Uniswap|ioTube|https://etherscan.io/token/0x9F90B457Dea25eF802E38D470ddA7343691D8FE1|
+|Polygon|CIOTX|Quickswap|ioTube|https://polygonscan.com/token/0x300211Def2a644b036A9bdd3e58159bb2074d388|
+|Solana|CIOTX|Raydium|Wormhole|https://solscan.io/token/QUUzqeiXHxjs9Yxm33tvugvUsKr5T8vjeyV4XhVsAfZ|
+|BSC|CIOTX|PancakeSwap|ioTube|https://bscscan.com/token/0x9678E42ceBEb63F23197D726B29b1CB20d0064E5|
+|Base (proposed)|CIOTX|Uniswap|Superbridge|–|
+|Unichain (proposed)|CIOTX|TBD|Superbridge|–|
 
 ---
 
-# Backward Compatibility
-- **Legacy Integrations**:
-  - CIOTX and ERC20 IOTX will remain operational during the six-month migration period but will be clearly marked as deprecated.
-  - Legacy smart contracts and bridges will provide temporary support before full deprecation.
+## **Design Principles**
+
+Our approach prioritizes the use of **official and native bridges** for each target chain, as they are generally the most trusted, sustainable, and well-integrated within their ecosystems:
+
+* **Wormhole** for bridging to **Solana**
+
+* **Superbridge** (the standard for L2 rollups) for **Base** and **Unichain**
+
+* **ioTube** for bridging from/to **IoTeX**
+
+* **Binance CEX** as a bridge to **BSC** (Binance Smart Chain)
+
+These choices aim to maximize compatibility with existing dApps while ensuring long-term reliability and user trust.
+
+![whiteboard_exported_image (2)](https://github.com/user-attachments/assets/dbf9c875-f53d-4d59-b6f5-286f7acfdaf5)
+
+
 
 ---
 
-# Security Considerations
-- **Smart Contract Audits**:
-  - All new contracts related to token unification and migration will undergo comprehensive security audits using reputable security vendors.
+# User Experience and Security Considerations
+
+This proposal prioritizes both user safety and simplicity. By leveraging the existing CIOTX architecture, users and developers benefit from a streamlined experience without introducing unnecessary migration steps or token confusion.
+
+#### **User Experience**
+
+* **No Migration Required**: Users are not required to swap tokens or move funds. CIOTX is already active on multiple chains, and its role is being formalized—not replaced.
+
+* **Improved Discoverability**: A unified token standard enables easier tracking on portfolio tools, DEX aggregators, and market data platforms.
+
+* **DeFi Compatibility**: Standardizing on CIOTX simplifies onboarding for users participating in DeFi protocols across Solana (Raydium), Base (Uniswap), Polygon (Quickswap), and more.
+
+#### **Security**
+
+* **Audits**: All smart contracts used in new CIOTX deployments (e.g., on Base, Unichain) will undergo comprehensive audits from reputable security firms before launch.
+
+* **Bridge Reliability**: CIOTX is only deployed through trusted, ecosystem-native bridges:
+
+  * **Wormhole** (Solana)
+
+  * **Superbridge** (L2s like Base and Unichain)
+
+  * **ioTube** (Ethereum, BSC, Polygon)
 
 ---
 
-# Conclusion
-The unification of IOTX into a single, standardized token is a crucial step toward streamlining the IoTeX ecosystem. By consolidating various representations of IOTX, we eliminate market fragmentation, enhance liquidity, and simplify user experience. This proposal outlines a structured migration plan, ensuring seamless adoption across exchanges, dApps, and major L1/L2 blockchains.
+## **Conclusion**
 
-Through coordinated efforts with key stakeholders, including liquidity providers and bridge operators, we will ensure a smooth transition over six months. The retirement of CIOTX and the legacy ERC20 IOTX will mark a significant milestone in IoTeX’s evolution, reinforcing the integrity and accessibility of IOTX as a unified, interoperable asset.
+Adopting **CIOTX** as the unified cross-chain representation of IOTX is a practical step toward reducing fragmentation, improving liquidity, and simplifying the user experience.
 
-By adopting this unified token standard, IoTeX strengthens its position as a leading blockchain platform, fostering broader adoption and long-term sustainability.
+By building on existing infrastructure and coordinating with exchanges, dApps, and bridge providers, we can strengthen IoTeX’s multichain presence with minimal disruption.
+
+Future decisions regarding other token variants, such as ERC20 IOTX, will be guided by community discussion and adoption trends.
+
+---
+
+## **Copyright**
+
+This document and its contents are made available under the CC0 public domain dedication.
