@@ -30,19 +30,36 @@ more than recommendations, and users are typically not free to ignore them. Exam
 changes to the decision-making process, and changes to the tools or environment used in IoTeX development. Any meta-IIP
 is also considered a Process IIP.
 
-## IIP Status
+# IoTeX Improvement Proposal (IIP) Lifecycle
 
-There are four kinds of status:
+## 1. Draft
+- An initial specification is written by the proposer.  
+- At this stage, the IIP is informal and subject to major revisions.
 
-- **Draft**: an IIP that is open for consideration.
+## 2. Community Review
+- The proposal is shared in the **IoTeX Community Forum** for open discussion.  
+- Feedback is collected from the community, developers, and stakeholders.  
+- The author may revise the draft based on input.
 
-- **Accepted**: an IIP that is planned for immediate adoption.
+## 3. Under Voting
+- Once matured, the IIP is submitted for **on-chain governance voting** via the **IoTeX Hub**.  
+- Voting determines whether the IIP proceeds to implementation or is rejected.  
+  - **If passed** → moves to Implementation.  
+  - **If rejected** → moved to Archive.  
 
-- **Final**: an IIP that has been adopted previously.
- 
-- **Deferred**: an IIP that is not being considered for immediate adoption. May be reconsidered in the future.
+## 4. Implementation
+- Technical work is carried out (usually in the next scheduled hardfork).  
+- This includes development, testing, and integration of the proposal into **IoTeX L1 Core**.
 
-- **Closed**: an IIP that is no longer considered for adoption.
+## 5. Live
+- The IIP becomes active on mainnet and part of IoTeX’s protocol.  
+- At this stage, the proposal is considered complete.
+
+## 6. Archive
+- IIPs that are rejected, deprecated, or made obsolete are moved into the archive for historical reference.
+
+<img width="5004" height="2052" alt="whiteboard_exported_image" src="https://github.com/user-attachments/assets/03be529d-c652-4d94-a1d0-2c7c2f95adc1" />
+
 
 ## IIP Formats and Templates
 
@@ -80,8 +97,7 @@ Start here:  https://iotex.io
 
 4) Submit for discussion: Once your proposal is ready, post it to the IoTeX Community Forum for discussion under the Governance Proposals category: https://community.iotex.io/c/governance-proposals
 
-5) Voting and implementation: Based on the feedback received, you may need to make revisions to your proposal. Once the IIP is finalized, it will go through community voting on the IoTeX snapshot: 
- https://snapshot.org/#/iotex.eth
+5) Voting and implementation: Based on the feedback received, you may need to make revisions to your proposal. Once the IIP is finalized, it will go through community voting on the IoTeX Governance Hub at: https://hub.iotex.io/governance 
 
 6) Implementation: Once the voting is passed, it will be implemented into the relevant IoTeX ecosystem protocol.
 
@@ -97,3 +113,5 @@ and [EEPs](https://eeps.io/), where we have learned and borrowed clauses heavily
 2019-05-20: Drafted the initial version of IIP guideline.
 
 2019-06-11: Added the IIP sample file.
+
+2025-09-09: Updated the IIP lifecycle section. 
