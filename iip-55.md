@@ -13,9 +13,11 @@ This proposal introduces a **Dynamic Witness Committee** mechanism for ioTube, t
 
 ## Motivation
 
-In the current ioTube bridge, a **static global witness list** and a single validator are used for all tokens and chains, requiring **> 2/3** of all witnesses to sign every transfer.  
-This model works but has drawbacks: no automatic key rotation when witnesses are compromised, the same security level for both small and large assets, growing costs as the witness set expands, and manual, centralized witness-list updates.  
-This proposal addresses these issues by introducing a **rotating committee of IoTeX delegates** (selected in a Roll-DPoS–style process), **per-token witness and minter mapping**, and **rules-based, on-chain management** of witness membership, while keeping the familiar > 2/3 multi-witness threshold for transfer validation.
+In the current ioTube bridge, a **static global witness list** and a single validator are used for all tokens and chains, requiring **>2/3** of all witnesses to sign every transfer. While functional, this architecture shows clear limitations as IoTeX and the broader ecosystem scale: no automatic key rotation when witnesses are compromised, identical security assumptions for both small and large assets, increasing operational costs as the witness set grows, and manual, centralized updates to the witness list.
+
+Over the next 6–18 months, the IoTeX ecosystem expects significant growth across stablecoins, RWA assets, and cross-chain value flows. At the same time, **millions of AI and RWAI agents** will begin operating autonomously across multiple chains, requiring reliable, scalable, and self-governing cross-chain infrastructure to move data and value. To support this environment, ioTube must evolve functionally, governance-wise, scale-wise, and security-wise.
+
+**IIP-55** addresses these needs by introducing a **rotating committee of IoTeX delegates** (selected via a Roll-DPoS–style process), **per-token witness and minter mappings**, and **rules-based on-chain management** of witness membership — while retaining the familiar **>2/3** multi-witness validation threshold. This ensures ioTube is prepared for the next phase of cross-chain activity, both for human users and for large-scale autonomous agent systems.
 
 ## Specification
 
@@ -89,7 +91,19 @@ This mechanism explains **how each bridged token chooses its own security settin
 
 In current deployments, the bridge uses `TransferValidatorWithPayload` with a single global witness list. `TransferValidatorV3` keeps the same high-level flow but allows this **per-token configuration**, and is intended to gradually replace `TransferValidatorWithPayload` in production as tokens migrate.
 
-### 3. Bridge Flow Overview (User Perspective)
+### 3. Economics and Governance for Token Support
+
+This section outlines the incentives for witnesses and the process for expanding token support.
+
+-   **Delegate Execution (Opt-in)**  
+    Delegates individually configure their nodes to support a specific token. The bridge only becomes operational for that token once a sufficient witness threshold (>2/3) is actively signing its transactions.
+
+-   **Incentives**  
+    Delegates are motivated to support assets by:
+    -   **Ecosystem Growth**: Bridging high-demand assets increases network utility and delegate reputation.
+    -   **Future Revenue**: The system architecture supports future implementation of fee-sharing mechanisms, distributing bridge fees to active witnesses based on on-chain participation.
+
+### 4. Bridge Flow Overview (User Perspective)
 
 Putting the mechanisms together, a typical cross-chain transfer works as follows:
 
@@ -122,6 +136,9 @@ This section explains **why** the mechanisms in the Specification are chosen.
 
 -   **Per-token Witness and Minter Mapping**  
     -   Different tokens have different risk profiles; per-token witness and minter mapping lets high-value or governance-critical assets choose stricter security (e.g., dedicated witness sets) without slowing down the entire bridge.  
+
+-   **Economics and Governance**  
+    -   **Delegate Autonomy**: Delegates manage their own risk and infrastructure costs by choosing which assets to support, acting as a final security check for new assets.
 
 ## Backwards Compatibility
 
