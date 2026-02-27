@@ -33,7 +33,7 @@ On February 20, 2026, the ioTube bridge was exploited, and unauthorized CIOTX to
 
 BSC, Polygon, and IoTeX were not affected by unauthorized minting. The bridges on these chains were paused as a precautionary measure and can be safely resumed to allow users to migrate their CIOTX back to IOTX before the full deprecation takes effect.
 
-**Note:** IOTX-ERC20 on Ethereum ([`0x6fB3e0A217407EFFf7Ca062D46c26E5d60a14d69`](https://etherscan.io/token/0x6fB3e0A217407EFFf7Ca062D46c26E5d60a14d69)) and Binance-Pegged IOTX on BSC ([`0x2aaF50869739e317AB80A57Bf87cAA35F5b60598`](https://bscscan.com/token/0x2aaF50869739e317AB80A57Bf87cAA35F5b60598)) were **not affected** by this exploit. These are separate tokens from CIOTX with independent contracts and are not part of the ioTube bridge system. They continue to function normally. No action is required for their holders under this proposal.
+**Note:** IOTX-ERC20 on Ethereum ([`0x6fB3e0A217407EFFf7Ca062D46c26E5d60a14d69`](https://etherscan.io/token/0x6fB3e0A217407EFFf7Ca062D46c26E5d60a14d69)) and Binance-Pegged IOTX on BSC ([`0x9678E42ceBEb63F23197D726B29b1CB20d0064E5`](https://bscscan.com/token/0x9678E42ceBEb63F23197D726B29b1CB20d0064E5)) were **not affected** by this exploit. These are separate tokens from CIOTX with independent contracts and are not part of the ioTube bridge system. They continue to function normally. No action is required for their holders under this proposal.
 
 ---
 
