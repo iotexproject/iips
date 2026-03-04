@@ -1,6 +1,6 @@
 ```
 IIP: 57
-Title: ZK Light Client Bridge to Ethereum
+Title: Trustless Bridge: Replacing Keys with Proofs
 Author: TBD (@TBD)
 Discussions-to: TBD
 Status: Draft
@@ -10,13 +10,11 @@ Created: 2026-03-03
 Requires: N/A
 ```
 
-## Simple Summary
-
-Replace the compromised ioTube bridge with a ZK Light Client Bridge that uses zero-knowledge proofs to trustlessly verify IoTeX consensus on Ethereum, enabling secure bidirectional bridging of USDT, USDC, WETH, and WBTC between Ethereum and IoTeX.
-
 ## Abstract
 
-This IIP proposes a new cross-chain bridge architecture that eliminates trusted intermediaries by using Succinct SP1 zero-knowledge proofs to cryptographically verify IoTeX's 24-delegate BFT consensus on Ethereum. For the Ethereum-to-IoTeX direction, the existing delegate consensus mechanism (17/24 BFT threshold) is used to attest deposits. For the IoTeX-to-Ethereum direction, a ZK proof of IoTeX block validity and receipt inclusion is submitted to an on-chain light client contract on Ethereum. This replaces the single-key multisig model of ioTube with mathematical guarantees, making private key compromise attacks impossible.
+The ioTube bridge was compromised on February 21, 2026 because it trusted keys — a single validator owner key was stolen, bypassing all security. This IIP replaces that trust model entirely: instead of keys, the new bridge trusts **mathematical proofs**.
+
+This proposal introduces a ZK Light Client Bridge that uses Succinct SP1 zero-knowledge proofs to cryptographically verify IoTeX's 24-delegate BFT consensus on Ethereum. No multisig, no trusted relayers, no upgradable validator contracts — just a proof that either verifies or doesn't. For deposits (Ethereum → IoTeX), the existing 17/24 delegate BFT consensus attests events. For withdrawals (IoTeX → Ethereum), a ZK proof of block finality and receipt inclusion is verified on-chain by Ethereum. The bridge supports USDT, USDC, WETH, and WBTC, with competitive proving open to all delegates and a hybrid fee model that sustains operations without protocol subsidies.
 
 ## Motivation
 
