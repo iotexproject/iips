@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-03
-Requires: N/A
+Supersedes: IIP-55
 ```
 
 ## Abstract
@@ -23,6 +23,33 @@ This proposal introduces a ZK Light Client Bridge that uses Succinct SP1 zero-kn
 On February 21, 2026, the ioTube cross-chain bridge was exploited for approximately $4.4M. The attacker compromised a single validator owner private key on the Ethereum side, used it to upgrade the Validator contract to a malicious version that bypassed all signature checks, and drained both the MintPool and TokenSafe contracts.
 
 **Root cause**: The ioTube bridge relied on a single validator owner key for critical administrative operations — a single point of failure. This is an architectural flaw, not a smart contract bug. The IoTeX L1 chain and consensus were unaffected.
+
+### Why Not Fix the Existing Bridge? (IIP-55)
+
+After the ioTube exploit, **IIP-55** ("Dynamic Witness Committee for ioTube") was proposed as an incremental upgrade. IIP-55 introduces rotating witness committees selected via VRF from the delegate pool, per-token witness sets, and a new `TransferValidatorV3` contract. While IIP-55 improves operational hygiene, it does not address the fundamental architectural flaw that caused the hack:
+
+**IIP-55 still trusts keys.** The core verification model remains N-of-M multisig — a rotating committee of 8 delegates must produce >2/3 signatures to authorize transfers. This is a strictly better multisig, but it is still a multisig. The attack surface is reduced in size but identical in kind:
+
+| Property | ioTube (pre-hack) | IIP-55 | IIP-57 (this proposal) |
+|----------|-------------------|--------|------------------------|
+| **Trust model** | Static witness keys | Rotating witness keys | ZK mathematical proof |
+| **What an attacker must compromise** | 1 owner key | >2/3 of 8 committee keys (~6 keys) | Break ZK proof soundness (mathematically infeasible) |
+| **Key compromise window** | Permanent | Per-epoch (~hours) | N/A — no keys in verification path |
+| **Ethereum verification** | Trusts signatures | Trusts signatures | Verifies IoTeX consensus cryptographically |
+| **Upgradable validator contract** | Yes (exploited) | Yes (`TransferValidatorV3`) | No — immutable light client + verified proofs |
+| **Off-chain trust dependency** | Relayers + witnesses | Relayers + witness committee service | None — proof is self-contained |
+
+Specific concerns with IIP-55:
+
+1. **Smaller committee = smaller security margin**: IIP-55 selects ~8 witnesses per epoch from the delegate pool. Compromising 6 keys (>2/3 of 8) during a single epoch is a realistic attack for a state-level adversary — significantly easier than compromising 17 of 24 full delegates. The ioTube hack demonstrated that even a single key compromise can be catastrophic when combined with contract upgrade rights.
+
+2. **Upgradable contracts remain**: `TransferValidatorV3` is an upgradable contract — the exact attack vector used in the ioTube hack. The attacker didn't break the signature scheme; they upgraded the validator contract to bypass it entirely. IIP-55 does not eliminate this vector.
+
+3. **Off-chain witness committee service**: IIP-55 introduces a new off-chain service that computes committee membership and submits proposals to relayers. This adds another trusted component to the system — another piece of infrastructure that can be compromised, go offline, or be manipulated.
+
+4. **No independent verification by Ethereum**: Under IIP-55, Ethereum still cannot independently verify that a transfer was legitimately finalized on IoTeX. It only checks that enough witness keys signed a message — it has no way to distinguish legitimate witness signatures from signatures produced by compromised keys. A ZK proof, by contrast, proves that IoTeX's actual consensus (17/24 delegates signing a block) endorsed the transaction.
+
+IIP-55 is a reasonable operational improvement for a multisig bridge, but given that ZK light client technology is now production-ready, this proposal argues that the correct response to the ioTube hack is to **eliminate the key-based trust model entirely** rather than incrementally harden it.
 
 ### Why ZK Proofs?
 
@@ -2758,6 +2785,7 @@ Withdrawal claims on Ethereum use a nonce-based system. Each withdrawal has a un
 
 ## References
 
+- [IIP-55: Dynamic Witness Committee for ioTube](https://github.com/iotexproject/iips/blob/master/iip-55.md)
 - [Succinct SP1 Documentation](https://docs.succinct.xyz/)
 - [SP1 Helios: Ethereum ZK Light Client](https://github.com/succinctlabs/sp1-helios)
 - [SP1 Verifier Contract Addresses](https://docs.succinct.xyz/docs/sp1/verification/contract-addresses)
