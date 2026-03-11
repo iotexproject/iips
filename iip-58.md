@@ -57,7 +57,7 @@ ioSwarm consists of three components that evolve together across five capability
 
 ```
  ┌──────────────────────────────────┐    ┌─────────────────────────────┐
- │    Delegate + Coordinator        │    │  AgentRewardPool (on-chain) │
+ │    Delegate + Coordinator        │    │  RewardSettlement (on-chain)│
  │    (iotex-core sidecar)          │    │                             │
  │                                  │    │  depositAndSettle()         │
  │  • Consensus & block signing     │───►│    coordinator deposits     │
@@ -83,6 +83,45 @@ ioSwarm consists of three components that evolve together across five capability
  │  Any machine · Any geography     │
  └──────────────────────────────────┘
 ```
+
+This IIP focuses on how these three components interact today. Below we outline how each component evolves as ioSwarm matures.
+
+#### Delegate + Coordinator → Thin Proposer
+
+Today, delegates run full iotex-core nodes that execute every transaction. As agents take on more work (L1→L5), the delegate's role thins progressively:
+
+| Phase | Delegate Responsibility | What Moves to Agents |
+|-------|------------------------|---------------------|
+| **Now** | Full node: consensus + execution + state | — |
+| **L1-L3** | Full node + coordinator sidecar | Tx validation (signatures, nonces, stateless EVM) |
+| **L4** | Consensus + state provider | Stateful EVM execution |
+| **L5 (ePBS)** | Consensus + block signing only | Entire block building |
+| **Future** | Proposer-only (thin client) | Everything except signing |
+
+At the end state, a delegate becomes a **thin proposer** — similar to Lido's model for liquid staking. Token holders stake into a protocol-managed pool, and the delegate's only job is to sign blocks produced by the agent swarm. The coordinator evolves from an iotex-core sidecar into a lightweight relay that connects proposers to builders, comparable to Ethereum's MEV-Boost relay.
+
+#### Agent Swarm → Block Builders
+
+Agents evolve from stateless tx validators into full block builders:
+
+- **L1-L3 (stateless)**: Commodity $5/mo VPS, no local state, pure computation. Many agents can serve many delegates simultaneously.
+- **L4 (stateful)**: Agents maintain synchronized state via state diffs. Can independently verify execution correctness.
+- **L5 (block builder)**: Agents construct complete candidate blocks — ordering transactions, computing state transitions, and producing `deltaStateDigest`. The best block wins.
+
+As agents reach L5, the swarm becomes a **competitive block-building market** where agents differentiate on block quality, MEV extraction, and latency — not just availability.
+
+#### RewardSettlement → Universal Reward Layer
+
+The on-chain reward contract (renamed from "AgentRewardPool") is designed to replace **Hermes**, the current centralized reward distribution service. Today Hermes handles delegate-to-voter reward distribution off-protocol. RewardSettlement brings all reward flows on-chain:
+
+| Reward Flow | Today (Hermes) | Future (RewardSettlement) |
+|------------|----------------|--------------------------|
+| Protocol → Delegate | Native staking reward | Same |
+| Delegate → Voters | Hermes (centralized) | `RewardSettlement.claim()` |
+| Delegate → Agent Swarm | Not yet | `RewardSettlement.claim()` |
+| Protocol → Agent (direct) | Not yet | Future: protocol-native agent rewards |
+
+The F1 cumulative reward-per-weight algorithm enables O(1) reward calculation regardless of agent count. As the system matures, RewardSettlement becomes the **single source of truth** for all reward distribution in the IoTeX protocol — eliminating the need for any centralized intermediary.
 
 ### Five Capability Levels (L1 → L5)
 
@@ -187,7 +226,7 @@ Coordinator deducts delegate cut (default 10%)
 Coordinator calls depositAndSettle(agents[], weights[]) + sends IOTX
   │
   ▼
-AgentRewardPool contract updates cumulativeRewardPerWeight
+RewardSettlement contract updates cumulativeRewardPerWeight
   │
   ▼
 Agent receives payout notification via heartbeat
@@ -199,7 +238,7 @@ Agent calls claim() at any time → IOTX transferred to wallet
 #### Contract Interface
 
 ```solidity
-contract AgentRewardPool {
+contract RewardSettlement {
     // Only callable by the designated coordinator address
     function depositAndSettle(
         address[] calldata agents,
