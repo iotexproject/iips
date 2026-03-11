@@ -15,11 +15,35 @@ ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a 
 
 ## Motivation
 
+### Execution Layer Separation
+
+Every blockchain has two layers of concern:
+
+```
+Consensus Layer    decide WHICH block is canonical (voting, attestation, fork choice)
+Execution Layer    decide WHAT goes into the block (tx validation, EVM execution, state)
+```
+
+In most chains — including IoTeX today — both layers run on the same machine, operated by the same entity. Ethereum recognized the value of separating them: ePBS ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) splits the **Proposer** (consensus) from the **Builder** (execution), allowing specialized builders to construct blocks while validators focus on consensus.
+
+ioSwarm applies the same principle to IoTeX, but goes further:
+
+| | Ethereum ePBS | IoTeX ioSwarm |
+|---|---|---|
+| **Consensus** | Validators (~900K) | Delegates (36) |
+| **Execution** | Builders (3–5 dominant, centralized) | Agent Swarm (thousands, permissionless) |
+| **Relay** | MEV-Boost relay | Coordinator (embedded in delegate) |
+| **Participation** | High barrier (specialized hardware, MEV expertise) | Low barrier ($5/mo VPS, anyone can join) |
+
+Ethereum's builder market is dominated by a handful of sophisticated MEV searchers. ioSwarm's execution layer is **open and decentralized** — thousands of commodity agents, each earning proportional to their work, with no special hardware or MEV expertise required to participate.
+
+**In one sentence: ioSwarm separates the execution layer from IoTeX's delegates and distributes it across a permissionless swarm of AI agents.**
+
 ### The Problem
 
 IoTeX runs on 36 delegate nodes. Each delegate is a single machine, operated by a single entity. This is the reality of most DPoS chains: decentralization in name, but a small club of operators in practice.
 
-ioSwarm addresses two fundamental limitations:
+ioSwarm addresses two fundamental limitations of this architecture:
 
 **1. Scale.** One delegate backed by 1,000 agents is fundamentally more robust than one delegate on one machine. Scale that across 36 delegates and you have a network of 36,000+ execution nodes — without changing a single line of consensus code.
 
