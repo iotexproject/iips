@@ -1,6 +1,6 @@
 ```
 IIP: 58
-Title: ioSwarm — AI Agent Network for Chain Execution
+Title: ioSwarm — Decentralized Execution Layer via AI Agent Swarm
 Author: Raullen Chai (@raullen)
 Discussions-to: TBD
 Status: Draft
@@ -15,7 +15,7 @@ ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a 
 
 ## Motivation
 
-### Execution Layer Separation
+### Consensus-Execution Separation
 
 Every blockchain has two layers of concern:
 
@@ -24,9 +24,15 @@ Consensus Layer    decide WHICH block is canonical (voting, attestation, fork ch
 Execution Layer    decide WHAT goes into the block (tx validation, EVM execution, state)
 ```
 
-In most chains — including IoTeX today — both layers run on the same machine, operated by the same entity. Ethereum recognized the value of separating them: ePBS ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) splits the **Proposer** (consensus) from the **Builder** (execution), allowing specialized builders to construct blocks while validators focus on consensus.
+In most chains — including IoTeX today — both layers run on the same machine, operated by the same entity. Separating them has been a recurring theme in blockchain architecture:
 
-ioSwarm applies the same principle to IoTeX, but goes further:
+| Milestone | What It Separates | How |
+|-----------|------------------|-----|
+| **Ethereum's Merge** | Consensus client from execution client | Two separate programs, but still on the **same operator's machine** |
+| **Ethereum's ePBS** ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) | Proposer from Builder (within block production) | Specialized builders construct blocks; validators just sign. But builders are **few and centralized** (3–5 dominant firms) |
+| **ioSwarm** | Consensus layer from execution layer | Execution moves to a **permissionless network** of thousands of independent agents |
+
+ioSwarm takes this separation further than either: the execution layer is not a different process on the same machine (Merge), nor a handful of specialized firms (ePBS). It is an **open, decentralized network** of commodity agents — anyone with a $5/mo VPS can join, perform execution work, and earn rewards.
 
 | | Ethereum ePBS | IoTeX ioSwarm |
 |---|---|---|
@@ -35,9 +41,9 @@ ioSwarm applies the same principle to IoTeX, but goes further:
 | **Relay** | MEV-Boost relay | Coordinator (embedded in delegate) |
 | **Participation** | High barrier (specialized hardware, MEV expertise) | Low barrier ($5/mo VPS, anyone can join) |
 
-Ethereum's builder market is dominated by a handful of sophisticated MEV searchers. ioSwarm's execution layer is **open and decentralized** — thousands of commodity agents, each earning proportional to their work, with no special hardware or MEV expertise required to participate.
+At L5 (full block building), ioSwarm's architecture *includes* ePBS as a special case — the delegate becomes the proposer, the agent becomes the builder. But the broader design encompasses L1–L4, where agents perform execution work without building blocks at all. ePBS is the endgame; consensus-execution separation is the framework.
 
-**In one sentence: ioSwarm separates the execution layer from IoTeX's delegates and distributes it across a permissionless swarm of AI agents.**
+**In one sentence: ioSwarm separates the execution layer from IoTeX's consensus delegates and distributes it across a permissionless swarm of AI agents.**
 
 ### The Problem
 
