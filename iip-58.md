@@ -74,7 +74,7 @@ This optimization pressure is what drives agents toward genuine autonomous intel
 | **Capability Level (L1–L5)** | A classification of agent capability, from L1 (signature verification only) to L5 (full block building). Higher levels require more resources but earn higher rewards. See [Capability Levels](#capability-levels-l1l5). |
 | **Epoch** | A fixed interval (configurable, default 3 blocks / ~30s) after which the coordinator tallies agent work and settles rewards on-chain. |
 | **RewardSettlement** | An on-chain smart contract that holds deposited rewards and allows agents to claim their share. Uses the F1 algorithm for O(1) proportional distribution. |
-| **deltaStateDigest** | IoTeX's block header field containing a hash of the ordered state change queue (not a Merkle Trie root). This is a key structural advantage — see [deltaStateDigest](#key-design-advantage-deltastateDigest). |
+| **deltaStateDigest** | IoTeX's block header field containing a hash of the ordered state change queue (not a Merkle Trie root). This is a key structural advantage — see [deltaStateDigest](#key-design-advantage-deltastatedigest). |
 | **State Diff** | An ordered list of state changes produced by executing a block. At L4+, the coordinator streams these to agents so they can maintain synchronized local state. |
 | **Shadow Mode** | A validation mode where agent results are compared against the delegate's own execution but not used for block production. Used to prove agent accuracy before trusting agent results. |
 
@@ -132,7 +132,7 @@ ioSwarm defines five capability levels that classify what an agent can do. Each 
 | **L1** | Signature Verification | None | Verify ECDSA signatures | Zero-trust (shadow) |
 | **L2** | Nonce & Balance Check | None | L1 + verify sender nonce and balance | Zero-trust (shadow) |
 | **L3** | Stateless EVM Execution | None | L2 + execute tx in EVM sandbox with coordinator-provided state | Zero-trust (shadow) |
-| **L4** | Stateful EVM Execution | Full EVM state (~1 GB) | L2 + execute tx against full local state with 100% accuracy | Shadow → trust-but-verify |
+| **L4** | Stateful EVM Execution | Full EVM state (~1 GB) | Full EVM execution against local state with 100% accuracy | Shadow → trust-but-verify |
 | **L5** | Full Block Building | Full EVM state (~1 GB) | Build entire candidate block: order txs, execute, compute block header fields | Verified delegation |
 
 Key transitions:
