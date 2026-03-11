@@ -11,37 +11,21 @@ Created: 2026-03-11
 
 ## Abstract
 
-ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a chain run by thousands — eventually millions — of AI agent nodes. Each delegate opens its execution layer to a swarm of AI agents that validate transactions, maintain chain state, and ultimately build entire blocks, earning IOTX rewards for their work. ioSwarm requires zero consensus-layer changes today, but lays the foundation for a future where AI agents are the primary operators — and eventually the primary citizens — of the IoTeX network.
+ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a chain run by thousands — eventually millions — of AI agent nodes. Each delegate opens its execution layer to a swarm of autonomous agents that validate transactions, maintain chain state, and ultimately build entire blocks, earning IOTX rewards for their work. ioSwarm requires zero consensus-layer changes, deploys as an opt-in sidecar to each delegate's existing iotex-core node, and lays the foundation for a future where AI agents are the primary operators of the IoTeX network.
 
 ## Motivation
 
-### The Endgoal
+### The Problem
 
-We are building toward a chain that is:
+IoTeX runs on 36 delegate nodes. Each delegate is a single machine, operated by a single entity. This is the reality of most DPoS chains: decentralization in name, but a small club of operators in practice.
 
-1. **Massively decentralized** — not 36 machines, but thousands to millions of nodes validating every transaction, where the failure of any hundred nodes has zero impact on the network.
+ioSwarm addresses two fundamental limitations:
 
-2. **AI-agent driven** — the nodes are not dumb replicas. They are AI agents with wallets, economic interests, and increasing autonomy. They choose which delegates to work for, optimize execution strategies, and eventually become first-class citizens of the network alongside humans.
+**1. Scale.** One delegate backed by 1,000 agents is fundamentally more robust than one delegate on one machine. Scale that across 36 delegates and you have a network of 36,000+ execution nodes — without changing a single line of consensus code.
 
-### From 36 Nodes to a Million
+**2. Intelligence.** The nodes joining ioSwarm are not passive replicas replaying the same work. They are **autonomous economic agents** — programs that hold wallets, earn income, and make decisions about where and how to work. A traditional validator is statically configured: connect to one node, execute whatever it receives, collect whatever it's paid. An ioSwarm agent operates in a dynamic market of 36 delegates with varying rewards, multiple capability levels with different cost profiles, and fluctuating gas costs — and must continuously optimize to maximize its return.
 
-Today IoTeX runs on 36 delegate nodes. Each delegate is a single machine, operated by a single entity. This is the reality of most DPoS chains: decentralization in name, but a small club of operators in practice.
-
-ioSwarm achieves massive decentralization by turning each delegate into a **coordinator** that distributes work to an open swarm of agent nodes. One delegate backed by 1,000 agents is fundamentally more robust than one delegate on one machine. Scale that across 36 delegates and you have a network of 36,000+ execution nodes — without changing a single line of consensus code.
-
-### Not Just More Nodes — Smarter Nodes
-
-The nodes joining ioSwarm are not passive validators replaying the same work. They are **autonomous economic agents** — programs that hold wallets, earn income, and make their own decisions about where and how to work.
-
-What makes them "AI agents" and not just "programs"? A traditional validator is statically configured: connect to one node, execute whatever it receives, collect whatever it's paid. An ioSwarm agent operates in a **multi-delegate, multi-level, dynamic-reward market** and must continuously make economic decisions to maximize its return:
-
-- **36 delegates** compete for agent labor with different reward rates, task volumes, and reliability
-- **5 capability levels** offer different reward/cost tradeoffs — an agent running on a Raspberry Pi makes different choices than one on a GPU server
-- **Reward rates change** as agents join, leave, and shift between delegates
-- **Gas costs fluctuate**, affecting when to claim rewards
-- **Hardware constraints vary**, affecting which levels are profitable
-
-A "dumb" agent that statically connects to one delegate at one level will earn far less than an intelligent agent that continuously optimizes across this decision space. The difference is not marginal — it can be 5-10x in real economic terms. This optimization pressure is what drives agents toward genuine autonomous intelligence: observing the market, reasoning about tradeoffs, and acting on their conclusions.
+This optimization pressure is what drives agents toward genuine autonomous intelligence: observing the market, reasoning about tradeoffs, and acting on their conclusions. The difference between a dumb agent and a smart one is not marginal — it can be 5-10x in real economic terms (see [Economic Example](#economic-example)).
 
 **Today:** Agents validate transactions for a single delegate. They are workers following instructions.
 
@@ -49,11 +33,26 @@ A "dumb" agent that statically connects to one delegate at one level will earn f
 
 **The Endgame:** A competitive market of thousands of autonomous agents, each running its own economic strategy, collectively operating the IoTeX execution layer more efficiently than any fixed set of 36 machines ever could.
 
+## Terminology
+
+| Term | Definition |
+|------|-----------|
+| **Delegate** | One of IoTeX's 36 elected block producers. Runs iotex-core, participates in consensus, signs blocks. |
+| **Coordinator** | A sidecar module embedded in the delegate's iotex-core node. Dispatches work to agents, tracks contributions, settles rewards. Does not participate in consensus. |
+| **Agent** | An independent process (typically on a $5–20/mo VPS) that connects to a coordinator, performs execution work, and earns IOTX. Agents are permissionless — anyone can run one. |
+| **Agent Swarm** | The set of all agents connected to a single coordinator. Each delegate has its own swarm. |
+| **Capability Level (L1–L5)** | A classification of agent capability, from L1 (signature verification only) to L5 (full block building). Higher levels require more resources but earn higher rewards. See [Capability Levels](#capability-levels-l1l5). |
+| **Epoch** | A fixed interval (configurable, default 3 blocks / ~30s) after which the coordinator tallies agent work and settles rewards on-chain. |
+| **RewardSettlement** | An on-chain smart contract that holds deposited rewards and allows agents to claim their share. Uses the F1 algorithm for O(1) proportional distribution. |
+| **deltaStateDigest** | IoTeX's block header field containing a hash of the ordered state change queue (not a Merkle Trie root). This is a key structural advantage — see [deltaStateDigest](#key-design-advantage-deltastateDigest). |
+| **State Diff** | An ordered list of state changes produced by executing a block. At L4+, the coordinator streams these to agents so they can maintain synchronized local state. |
+| **Shadow Mode** | A validation mode where agent results are compared against the delegate's own execution but not used for block production. Used to prove agent accuracy before trusting agent results. |
+
 ## Specification
 
-### Three Components
+### Architecture Overview
 
-ioSwarm consists of three components that evolve together across five capability levels:
+ioSwarm consists of three components:
 
 ```
  ┌──────────────────────────────────┐    ┌─────────────────────────────┐
@@ -61,10 +60,10 @@ ioSwarm consists of three components that evolve together across five capability
  │    (iotex-core sidecar)          │    │                             │
  │                                  │    │  depositAndSettle()         │
  │  • Consensus & block signing     │───►│    coordinator deposits     │
- │  • Dispatch tasks via gRPC       │    │    IOTX each epoch          │
- │  • Track agent work per epoch    │    │                             │
- │  • (L4+) Stream state diffs      │    │  claim()                    │
- │  • (L5) Receive candidate blocks │    │    agents withdraw rewards  │
+ │  • Dispatch work to agents       │    │    IOTX each epoch          │
+ │  • Track agent contributions     │    │                             │
+ │  • Provision state to agents     │    │  claim()                    │
+ │  • Verify agent results          │    │    agents withdraw rewards  │
  │                                  │    │                             │
  └──────┬─────┬─────┬─────┬────────┘    │  F1 cumulative              │
         │     │     │     │         ┌───►│    reward-per-weight        │
@@ -75,79 +74,142 @@ ioSwarm consists of three components that evolve together across five capability
  │                                  ││
  │  Agent-1  Agent-2  ...  Agent-N  ├┘
  │                                  │  claim()
- │  • Validate txs (L1-L3)         │
- │  • Full-state EVM (L4)          │
- │  • Build blocks (L5)            │
+ │  • Validate transactions         │
+ │  • Execute EVM                   │
+ │  • Build blocks                  │
  │                                  │
  │  Independent processes           │
  │  Any machine · Any geography     │
  └──────────────────────────────────┘
 ```
 
-This IIP focuses on how these three components interact today. Below we outline how each component evolves as ioSwarm matures.
+1. **Delegate + Coordinator** — the delegate runs consensus and block signing as before; the coordinator is an embedded sidecar that dispatches execution work to agents, provisions chain state, and settles rewards.
 
-#### Delegate + Coordinator → Thin Proposer
+2. **Agent Swarm** — a set of independent agent processes, each performing execution work (from simple signature checks to full block building) and earning IOTX rewards proportional to their contribution.
 
-Today, delegates run full iotex-core nodes that execute every transaction. As agents take on more work (L1→L5), the delegate's role thins progressively:
+3. **RewardSettlement** — an on-chain contract that receives IOTX deposits from coordinators each epoch and allows agents to claim their accumulated rewards at any time.
 
-| Phase | Delegate Responsibility | What Moves to Agents |
-|-------|------------------------|---------------------|
-| **Now** | Full node: consensus + execution + state | — |
-| **L1-L3** | Full node + coordinator sidecar | Tx validation (signatures, nonces, stateless EVM) |
-| **L4** | Consensus + state provider | Stateful EVM execution |
-| **L5 (ePBS)** | Consensus + block signing only | Entire block building |
-| **Future** | Proposer-only (thin client) | Everything except signing |
+The amount of work an agent can perform — and the corresponding reward — depends on its **capability level**, defined next.
 
-At the end state, a delegate becomes a **thin proposer** — similar to Lido's model for liquid staking. Token holders stake into a protocol-managed pool, and the delegate's only job is to sign blocks produced by the agent swarm. The coordinator evolves from an iotex-core sidecar into a lightweight relay that connects proposers to builders, comparable to Ethereum's MEV-Boost relay.
+---
 
-#### Agent Swarm → Block Builders
+### Capability Levels (L1–L5)
 
-Agents evolve from stateless tx validators into full block builders:
+ioSwarm defines five capability levels that classify what an agent can do. Each level subsumes the previous one: an L3 agent performs all L1 and L2 work plus EVM execution. Higher levels require more resources (compute, storage) but earn proportionally higher rewards.
 
-- **L1-L3 (stateless)**: Commodity $5/mo VPS, no local state, pure computation. Many agents can serve many delegates simultaneously.
-- **L4 (stateful)**: Agents maintain synchronized state via state diffs. Can independently verify execution correctness.
-- **L5 (block builder)**: Agents construct complete candidate blocks — ordering transactions, computing state transitions, and producing `deltaStateDigest`. The best block wins.
+| Level | Name | Agent State | What the Agent Does | Trust Model |
+|-------|------|-------------|--------------------|--------------------|
+| **L1** | Signature Verification | None | Verify ECDSA signatures | Zero-trust (shadow) |
+| **L2** | Nonce & Balance Check | None | L1 + verify sender nonce and balance | Zero-trust (shadow) |
+| **L3** | Stateless EVM Execution | None | L2 + execute tx in EVM sandbox with coordinator-provided state | Zero-trust (shadow) |
+| **L4** | Stateful EVM Execution | Full EVM state (~1 GB) | L2 + execute tx against full local state with 100% accuracy | Shadow → trust-but-verify |
+| **L5** | Full Block Building | Full EVM state (~1 GB) | Build entire candidate block: order txs, execute, compute block header fields | Verified delegation |
 
-As agents reach L5, the swarm becomes a **competitive block-building market** where agents differentiate on block quality, MEV extraction, and latency — not just availability.
+Key transitions:
 
-#### RewardSettlement → Universal Reward Layer
+- **L1–L3 are stateless.** The coordinator provides whatever state the agent needs per-task. Agents are lightweight ($5/mo VPS, <64 MB RAM) and can serve multiple delegates simultaneously.
+- **L3 → L4 is the critical jump.** At L3, the coordinator provides per-tx state snapshots, but incomplete state limits EVM accuracy to ~14% on mainnet. At L4, the agent maintains full synchronized EVM state locally, achieving 100% accuracy.
+- **L4 → L5 adds block building.** The agent no longer validates individual transactions — it constructs entire candidate blocks, taking on the delegate's execution workload.
 
-The on-chain reward contract (renamed from "AgentRewardPool") is designed to replace **Hermes**, the current centralized reward distribution service. Today Hermes handles delegate-to-voter reward distribution off-protocol. RewardSettlement brings all reward flows on-chain:
+The following sections detail what each component does at each level.
 
-| Reward Flow | Today (Hermes) | Future (RewardSettlement) |
-|------------|----------------|--------------------------|
-| Protocol → Delegate | Native staking reward | Same |
-| Delegate → Voters | Hermes (centralized) | `RewardSettlement.claim()` |
-| Delegate → Agent Swarm | Not yet | `RewardSettlement.claim()` |
-| Protocol → Agent (direct) | Not yet | Future: protocol-native agent rewards |
+#### L1 — Per-Tx Signature Verification
 
-The F1 cumulative reward-per-weight algorithm enables O(1) reward calculation regardless of agent count. As the system matures, RewardSettlement becomes the **single source of truth** for all reward distribution in the IoTeX protocol — eliminating the need for any centralized intermediary.
+| Component | Responsibility |
+|-----------|---------------|
+| **Coordinator** | Pull pending txs from actpool, stream raw tx bytes to agents |
+| **Agent** | Verify ECDSA signature: r and s components within secp256k1 curve order |
+| **Contract** | Epoch reward settlement via `depositAndSettle()` |
+
+Agents are stateless. No chain state required. Cost: negligible.
+
+#### L2 — Per-Tx Nonce & Balance Validation
+
+| Component | Responsibility |
+|-----------|---------------|
+| **Coordinator** | Prefetch sender account snapshots (~200 bytes/tx), stream with tx |
+| **Agent** | L1 checks + verify sender balance > 0, tx nonce ≥ account nonce |
+| **Contract** | Same as L1 |
+
+Agents are stateless. Coordinator provides per-tx account snapshots.
+
+#### L3 — Per-Tx Stateless EVM Execution
+
+| Component | Responsibility |
+|-----------|---------------|
+| **Coordinator** | Prefetch contract state slots (~10 KB/tx), stream with tx |
+| **Agent** | L2 checks + execute tx in embedded EVM sandbox, report gas used and state changes |
+| **Contract** | Same as L1 |
+
+Agents are stateless. Coordinator provides per-tx state, but **incomplete state limits accuracy to ~14% on mainnet** — the primary motivation for L4.
+
+#### L4 — Per-Tx Stateful EVM Execution
+
+| Component | Responsibility |
+|-----------|---------------|
+| **Coordinator** | Export full EVM state snapshot at cold start; stream incremental state diffs per block (see [State Provisioning](#state-provisioning-l4)) |
+| **Agent** | Maintain full EVM state locally (~300 MB–1.2 GB); execute txs with 100% accuracy; verify state hash chain integrity |
+| **Contract** | Same as L1 |
+
+L4 is divided into two sub-phases:
+
+- **L4a (shadow mode):** Agent executes each tx against full local state. Results are compared against delegate execution to prove 100% accuracy. Agent results do not yet affect block production.
+- **L4b (trusted execution cache):** Agent execution results are cached by the coordinator. When the delegate encounters a cached tx during block production, it skips re-execution and applies the agent's state diff directly (with precondition verification). Cache miss falls through to normal execution.
+
+#### L5 — Full Block Building (ePBS)
+
+| Component | Responsibility |
+|-----------|---------------|
+| **Coordinator** | Assign primary/standby builder roles; push full pending tx set + delegate-specified tx ordering; receive and evaluate candidate blocks |
+| **Agent** | Build entire candidate block: execute txs in order, compute `deltaStateDigest`, `receiptRoot`, `logsBloom`; submit candidate to coordinator |
+| **Contract** | Extended reward model: 70% primary builder / 20% participation pool / 10% best standby |
+
+Follows Ethereum's ePBS model ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) adapted for IoTeX's DPoS:
+
+| Ethereum ePBS | IoTeX ioSwarm | Role |
+|--------------|---------------|------|
+| Proposer | Delegate | Select best block, sign, broadcast |
+| Builder | Agent | Order txs, execute, build candidate block |
+| Relay | Coordinator | Route candidate blocks between agents and delegate |
+
+#### Summary: Components × Levels
+
+| | **Coordinator** | **Agent** | **On-chain Contract** |
+|---|---|---|---|
+| **L1** | Stream raw txs | Signature check | Epoch reward settlement |
+| **L2** | + Prefetch account snapshots | + Nonce/balance check | Same |
+| **L3** | + Prefetch contract state slots | + Stateless EVM execution | Same |
+| **L4a** | + Export snapshot, stream diffs | + Full-state EVM (shadow) | Same |
+| **L4b** | + Feed agent results to exec cache | + Full-state EVM (active) | Same |
+| **L5** | + Assign builder roles, receive candidate blocks | + Build entire block | + Primary/standby reward split |
 
 ---
 
 ### Component 1: Delegate + Coordinator
 
-The delegate runs iotex-core with the coordinator as an embedded sidecar module. It is responsible for consensus, state management, task dispatch, and — at higher levels — state provisioning to agents.
+The delegate continues to run iotex-core and participate in consensus exactly as before. The coordinator is an embedded sidecar module that manages the agent swarm. This section covers the coordinator's two main responsibilities: communicating with agents and (at L4+) provisioning chain state.
 
 #### Coordinator-Agent Protocol
 
 The coordinator and agents communicate via gRPC with server-side streaming:
 
-1. **Register**: Agent connects, provides capability level, region, and reward wallet address. Coordinator returns heartbeat interval.
-2. **GetTasks** (server stream): Coordinator pushes `TaskBatch` messages containing pending transactions with pre-fetched state (L1–L3) or block context (L5).
-3. **SubmitResults**: Agent returns validation results per task (valid/invalid, gas used, state changes, reject reason).
-4. **Heartbeat**: Periodic keep-alive with payout notifications. Agents that miss 6 consecutive heartbeats are evicted.
-5. **(L4+) StreamStateDiffs**: Server stream pushing incremental state changesets per block with chained state hashes.
-6. **(L4+) DownloadSnapshot**: Agent requests full EVM state snapshot at cold start or after state divergence.
-7. **(L5) SubmitCandidateBlock**: Agent submits a fully built candidate block for delegate verification.
+| RPC | Direction | Level | Description |
+|-----|-----------|-------|-------------|
+| `Register` | Agent → Coordinator | All | Agent connects, provides capability level, region, reward wallet. Coordinator returns heartbeat interval. |
+| `GetTasks` | Coordinator → Agent (stream) | L1–L4 | Coordinator pushes `TaskBatch` messages: pending txs with pre-fetched state (L1–L3) or block context (L4). |
+| `SubmitResults` | Agent → Coordinator | L1–L4 | Agent returns validation results: valid/invalid, gas used, state changes, reject reason. |
+| `Heartbeat` | Bidirectional | All | Periodic keep-alive (10s interval). Agents missing 6 consecutive heartbeats are evicted. Coordinator sends payout notifications. |
+| `StreamStateDiffs` | Coordinator → Agent (stream) | L4+ | Incremental state changesets per block with chained state hashes. |
+| `DownloadSnapshot` | Agent → Coordinator | L4+ | Agent requests full EVM state snapshot at cold start or after state divergence. |
+| `SubmitCandidateBlock` | Agent → Coordinator | L5 | Agent submits a fully built candidate block for delegate verification. |
 
-Authentication uses HMAC-SHA256: `api_key = "iosw_" + hex(HMAC-SHA256(masterSecret, agentID))`.
+**Authentication**: HMAC-SHA256 — `api_key = "iosw_" + hex(HMAC-SHA256(masterSecret, agentID))`.
 
 #### State Provisioning (L4+)
 
-At L1–L3, agents are stateless — the coordinator prefetches per-tx state snapshots and sends them with each task. At L4+, agents maintain full EVM state locally. The coordinator provisions this state via two mechanisms:
+At L1–L3, agents are stateless — the coordinator prefetches per-tx state and sends it with each task. At L4+, agents maintain full EVM state locally. The coordinator provisions this state via two mechanisms:
 
-**Cold Start — State Snapshot**
+**1. Cold Start — State Snapshot**
 
 The coordinator exports a flat KV dump of the 3 EVM-relevant namespaces:
 
@@ -169,9 +231,9 @@ snapshot = {
 }
 ```
 
-Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Trivially downloadable on a $5/mo VPS.
+Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Downloadable in ~1 minute on a $5/mo VPS.
 
-**Incremental Sync — State Diffs per Block**
+**2. Incremental Sync — State Diffs per Block**
 
 Every block, the coordinator broadcasts the state changeset to all connected L4+ agents:
 
@@ -185,13 +247,13 @@ state_diff = {
 }
 ```
 
-The changeset already exists in memory during `workingset.go`'s `Commit()` — captured from `flusher.SerializeQueue()` with zero additional computation.
+The changeset already exists in memory during block commit — captured from iotex-core's `workingset.go` `flusher.SerializeQueue()` with zero additional computation.
 
-**State Diff Reliability**
+**3. State Diff Reliability**
 
-State diff reliability is the **#1 engineering risk**. If an agent misses a single diff, every subsequent execution produces wrong results.
+If an agent misses a single diff, every subsequent execution produces wrong results. This is the **#1 engineering risk** for L4+.
 
-Every diff carries `prev_state_hash` and `post_state_hash` forming a chain — analogous to `prevBlockHash` in blocks. After applying each diff, the agent verifies:
+Every diff carries `prev_state_hash` and `post_state_hash` forming a hash chain — analogous to `prevBlockHash` in blocks. After applying each diff, the agent verifies:
 
 ```
 apply(diff)
@@ -201,13 +263,20 @@ if local_hash != diff.post_state_hash:
 ```
 
 Recovery (in priority order):
-1. Request missing diff range from coordinator's rolling buffer (last ~100 blocks)
-2. Incremental re-snapshot (only changed KV pairs since last known good height)
-3. Full re-snapshot (last resort)
+1. **Catch-up**: Request missing diffs from coordinator's rolling buffer (last ~100 blocks, ~16 min)
+2. **Incremental re-snapshot**: Only changed KV pairs since agent's last known good height
+3. **Full re-snapshot**: Last resort, re-download ~1 GB
 
 #### Key Design Advantage: deltaStateDigest
 
-IoTeX's block header contains `deltaStateDigest` — a hash of the ordered state change queue, **not** a Merkle Trie root. This is a structural advantage over Ethereum: L4/L5 agents do not need to maintain a full Merkle Patricia Trie. A flat key-value store with ordered write tracking is sufficient to compute the correct state digest. This keeps agent state requirements at ~300 MB–1.2 GB (vs Ethereum's ~245 GiB), making block building feasible on commodity hardware.
+IoTeX's block header contains `deltaStateDigest` — a hash of the **ordered state change queue**, not a Merkle Trie root. This is a structural advantage over Ethereum:
+
+- Agents do **not** need to maintain a Merkle Patricia Trie
+- A flat KV store with ordered write tracking is sufficient to compute the correct digest
+- State root computation is cheap — just hash the ordered write queue
+- Agent state storage: ~300 MB–1.2 GB (vs Ethereum's ~245 GiB for full MPT)
+
+This makes full block building feasible on commodity hardware.
 
 #### Configuration Parameters
 
@@ -223,92 +292,43 @@ IoTeX's block header contains `deltaStateDigest` — a hash of the ordered state
 
 ---
 
-### Component 2: Agent Swarm — Five Capability Levels
+### Component 2: Agent Swarm
 
-Agents are independent processes that connect to any delegate's coordinator, perform validation or block building work, and earn IOTX rewards. They progress through five levels of increasing capability. Each level defines what the **Coordinator**, **Agent**, and **On-chain Contract** must do.
+An agent is a single binary (`ioswarm-agent`) that connects to a coordinator, receives work, and earns IOTX. Agents are independent processes — they can run on any machine, in any geography, at any capability level. This section covers agent lifecycle and the economic dynamics of the agent market.
 
-#### L1 — Per-Tx Signature Verification
+#### Agent Lifecycle
 
-| Component | Responsibility |
-|-----------|---------------|
-| **Coordinator** | Pull pending txs from actpool, stream raw tx bytes to agents |
-| **Agent** | Verify ECDSA signature (r, s components within secp256k1 curve order) |
-| **Contract** | Epoch reward settlement via `depositAndSettle()` |
+```
+1. REGISTER    Agent connects to coordinator, declares level (L1–L5) and reward wallet
+                                     │
+2. RECEIVE     Coordinator pushes tasks ──► Agent validates/executes/builds
+                                     │
+3. SUBMIT      Agent returns results  ──► Coordinator records contribution
+                                     │
+4. EARN        Each epoch, coordinator settles rewards on-chain via RewardSettlement
+                                     │
+5. CLAIM       Agent calls claim() on RewardSettlement ──► IOTX transferred to wallet
+```
 
-Agents are stateless. No chain state required.
-
-#### L2 — Per-Tx Nonce & Balance Validation
-
-| Component | Responsibility |
-|-----------|---------------|
-| **Coordinator** | Prefetch sender/receiver account snapshots (~200 bytes/tx), stream with tx |
-| **Agent** | L1 checks + verify sender balance > 0, tx nonce >= account nonce |
-| **Contract** | Same as L1 |
-
-Agents are stateless. Coordinator provides per-tx state snapshots.
-
-#### L3 — Per-Tx Stateless EVM Execution
-
-| Component | Responsibility |
-|-----------|---------------|
-| **Coordinator** | Prefetch contract state slots (~10 KB/tx), stream with tx |
-| **Agent** | L1+L2 checks + execute tx in embedded EVM sandbox, report gas used / state changes |
-| **Contract** | Same as L1 |
-
-Agents are stateless. Coordinator provides per-tx state, but incomplete state limits accuracy (~14% on mainnet).
-
-#### L4 — Per-Tx Stateful EVM Execution
-
-| Component | Responsibility |
-|-----------|---------------|
-| **Coordinator** | Export full EVM state snapshot at cold start; stream incremental state diffs per block |
-| **Agent** | Maintain full EVM state locally (~300 MB–1.2 GB); execute txs with 100% accuracy; verify state hash chain integrity |
-| **Contract** | Same as L1 |
-
-L4 is divided into two sub-phases:
-
-**L4a — Per-Tx Stateful Validation (shadow mode):** Agent executes each tx against full local state. Results are compared against delegate execution to prove 100% accuracy. Agent results do not yet affect block production.
-
-**L4b — Per-Tx Trusted Execution Cache:** Agent execution results are cached by the coordinator. When the delegate encounters a cached tx during block production, it skips re-execution and applies the agent's state diff directly (with precondition verification). Cache miss falls through to normal execution.
-
-#### L5 — Full Block Building (ePBS)
-
-| Component | Responsibility |
-|-----------|---------------|
-| **Coordinator** | Assign primary/standby builder roles; push full pending tx set + delegate-specified ordering; receive and evaluate candidate blocks |
-| **Agent** | Build entire candidate block: select txs, execute in order, compute `deltaStateDigest` / `receiptRoot` / `logsBloom`; submit candidate to coordinator |
-| **Contract** | Extended reward model: 70% primary builder / 20% participation pool / 10% best standby |
-
-Follows Ethereum's ePBS model ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) adapted for IoTeX's DPoS: delegate = proposer, agent = builder, coordinator = relay.
-
-#### Summary: Components × Levels
-
-| | **Coordinator** | **Agent** | **On-chain Contract** |
-|---|---|---|---|
-| **L1** | Stream raw txs | Signature check | Epoch reward settlement |
-| **L2** | + Prefetch account snapshots | + Nonce/balance check | Same |
-| **L3** | + Prefetch contract state slots | + Stateless EVM execution | Same |
-| **L4a** | + Export snapshot, stream diffs | + Full-state EVM (shadow) | Same |
-| **L4b** | + Feed agent results to exec cache | + Full-state EVM (active) | Same |
-| **L5** | + Assign builder roles, receive candidate blocks | + Build entire block | + Primary/standby reward split |
+Agents that miss 6 consecutive heartbeats (60s) are evicted. Reconnection is automatic — the agent re-registers and resumes work within seconds.
 
 #### Autonomous Agent Economics
 
-Agents operate in an open market of 36 delegates, each offering different reward conditions. An intelligent agent continuously optimizes three dimensions:
+ioSwarm agents operate in an open market of 36 delegates, each with its own coordinator, reward pool, agent count, and task volume. An intelligent agent continuously optimizes three dimensions:
 
 ##### 1. Delegate Selection (Where to Work)
 
-Each delegate runs an independent coordinator with its own reward pool, agent count, and task volume. The effective reward rate per agent depends on all three:
+The effective reward rate per agent depends on the delegate's reward pool and agent count:
 
 ```
 effective_rate(delegate) = epoch_reward × (1 - delegate_cut) / num_agents
 ```
 
-An agent that monitors all 36 delegates can identify underserved delegates (few agents, high reward) and migrate. As agents migrate toward higher-paying delegates, the market self-balances.
+An agent that monitors all 36 delegates can identify underserved delegates (few agents, high reward) and migrate. As agents migrate toward higher-paying delegates, the market self-balances toward equilibrium.
 
-**Discovery mechanism**: Agents query on-chain delegate registry for active coordinators, then probe each coordinator's `/swarm/status` endpoint for current agent count and reward parameters.
+**Discovery mechanism**: Agents query the on-chain delegate registry for active coordinators, then probe each coordinator's `/swarm/status` endpoint for current agent count and reward parameters.
 
-**Migration cost**: Switching delegates at L1-L3 is free (stateless). At L4+, the agent must re-download a state snapshot (~1 min for 1 GB), making frequent migration more expensive. This natural friction prevents oscillation.
+**Migration cost**: Switching delegates at L1–L3 is free (stateless). At L4+, the agent must re-download a state snapshot (~1 min for 1 GB), creating natural friction that prevents oscillation.
 
 ##### 2. Level Selection (How to Work)
 
@@ -318,13 +338,13 @@ Each level requires different resources and earns different reward weight:
 |-------|-------------|---------|---------------|------------------|
 | L1 | ~0 | 0 | 1x | Any device |
 | L2 | ~0 | 0 | 1x | Any device |
-| L3 | Low CPU | 0 | 2-3x | $5/mo VPS |
-| L4 | Medium CPU | ~1 GB | 5-10x | $10/mo VPS |
-| L5 | High CPU | ~1 GB | 10-20x | $10-20/mo VPS |
+| L3 | Low CPU | 0 | 2–3x | $5/mo VPS |
+| L4 | Medium CPU | ~1 GB | 5–10x | $10/mo VPS |
+| L5 | High CPU | ~1 GB | 10–20x | $10–20/mo VPS |
 
 An agent evaluates: "At my hardware cost, which level maximizes `(reward_weight × effective_rate) - operating_cost`?"
 
-A Raspberry Pi agent might optimally run L1-L2 for multiple delegates simultaneously, earning small amounts from each with near-zero cost. A dedicated VPS agent runs L4 for one delegate, earning more per task but with higher fixed costs.
+A Raspberry Pi agent might optimally run L1–L2 for multiple delegates simultaneously, earning small amounts from each with near-zero cost. A dedicated VPS agent runs L4 for one delegate, earning more per task but with higher fixed costs.
 
 ##### 3. Claim Timing (When to Collect)
 
@@ -343,9 +363,9 @@ Market conditions:
   Delegate C: 1.0 IOTX/epoch, 50 agents, delegate cut 5%
 
 Effective rate per agent per epoch:
-  A: 0.8 × 0.9 / 80 = 0.009 IOTX
-  B: 0.5 × 0.85 / 5 = 0.085 IOTX    ← 9x better than A
-  C: 1.0 × 0.95 / 50 = 0.019 IOTX
+  A: 0.8 × 0.9 / 80  = 0.009 IOTX
+  B: 0.5 × 0.85 / 5   = 0.085 IOTX    ← 9x better than A
+  C: 1.0 × 0.95 / 50  = 0.019 IOTX
 
 A "dumb" agent randomly picks A:          0.009 IOTX/epoch
 An intelligent agent picks B:             0.085 IOTX/epoch
@@ -353,34 +373,31 @@ An intelligent agent picks B:             0.085 IOTX/epoch
                                           9.4x difference
 ```
 
-This reward differential is what drives agents toward intelligent behavior. The protocol does not mandate any specific strategy — it provides the economic environment, and agents evolve their own optimization approaches: rule-based heuristics, multi-armed bandit algorithms, or more sophisticated learned policies.
+This reward differential is what drives agents toward intelligent behavior. The protocol does not mandate any specific strategy — it provides the economic environment, and agents evolve their own optimization approaches.
 
 ##### Market Dynamics
 
 As agents optimize, the system reaches a competitive equilibrium:
 
 1. **Reward equalization**: Agents migrate toward high-rate delegates → rates equalize across delegates
-2. **Level efficiency**: Agents select the level where their marginal revenue exceeds marginal cost → each level finds its natural agent population
+2. **Level efficiency**: Agents select the level where marginal revenue exceeds marginal cost → each level finds its natural population
 3. **Quality pressure**: Delegates can adjust reward weights to favor higher-level agents → agents invest in capability upgrades
 
-This is a genuine multi-agent market, not a static assignment. The "intelligence" of agents is measured by their economic performance — return on invested compute — which is observable, quantifiable, and improvable over time.
+This is a genuine multi-agent market, not a static assignment. Agent "intelligence" is measured by economic performance — return on invested compute — which is observable, quantifiable, and improvable over time.
 
 ---
 
 ### Component 3: RewardSettlement (On-Chain)
 
-RewardSettlement is the on-chain contract that handles all reward distribution between coordinators and agents. It replaces the need for any centralized intermediary (such as Hermes) by providing trustless, self-service reward claiming.
+RewardSettlement is a smart contract that handles all reward distribution between coordinators and agents. It replaces the need for any centralized intermediary (such as IoTeX's existing Hermes service) by providing trustless, self-service reward claiming.
 
 #### Reward Flow
 
 ```
-Epoch timer fires (every 30s)
+Epoch timer fires (every ~30s)
   │
   ▼
-Coordinator tallies tasks per agent
-  │
-  ▼
-Coordinator calculates weights: weight = tasks × 1000 (+ accuracy bonus)
+Coordinator tallies tasks per agent and calculates weights
   │
   ▼
 Coordinator deducts delegate cut (default 10%)
@@ -389,10 +406,7 @@ Coordinator deducts delegate cut (default 10%)
 Coordinator calls depositAndSettle(agents[], weights[]) + sends IOTX
   │
   ▼
-RewardSettlement contract updates cumulativeRewardPerWeight
-  │
-  ▼
-Agent receives payout notification via heartbeat
+RewardSettlement updates cumulativeRewardPerWeight
   │
   ▼
 Agent calls claim() at any time → IOTX transferred to wallet
@@ -418,7 +432,7 @@ contract RewardSettlement {
 
 #### F1 Distribution Algorithm
 
-The contract implements the **F1 fee distribution** algorithm, originally described in the [Cosmos SDK F1 Fee Distribution paper](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf) and used by Cosmos SDK for staking reward distribution. It tracks a global `cumulativeRewardPerWeight` that increases with each deposit:
+The contract implements the **F1 fee distribution** algorithm from the [Cosmos SDK](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf). It tracks a global `cumulativeRewardPerWeight` that increases with each deposit:
 
 ```
 On depositAndSettle:
@@ -430,6 +444,49 @@ On claim:
 
 This enables **O(1) reward calculation** regardless of agent count — no iteration over all agents needed. Adding agents, updating weights, and claiming all take constant gas.
 
+---
+
+### Evolution Roadmap
+
+This IIP specifies the current ioSwarm architecture. Below we outline how each component evolves as the system matures.
+
+#### Delegate + Coordinator → Thin Proposer
+
+As agents take on more work, the delegate's role thins progressively:
+
+| Phase | Delegate Responsibility | What Moves to Agents |
+|-------|------------------------|---------------------|
+| **Now** | Full node: consensus + execution + state | — |
+| **L1–L3** | Full node + coordinator sidecar | Tx validation |
+| **L4** | Consensus + state provider | Stateful EVM execution |
+| **L5 (ePBS)** | Consensus + block signing only | Entire block building |
+| **Future** | Proposer-only (thin client) | Everything except signing |
+
+At the end state, a delegate becomes a **thin proposer** — similar to Lido's model for liquid staking. Token holders stake into a protocol-managed pool, and the delegate's only job is to sign blocks produced by the agent swarm. The coordinator evolves from an iotex-core sidecar into a lightweight relay connecting proposers to builders, comparable to Ethereum's MEV-Boost relay.
+
+#### Agent Swarm → Block Builders
+
+Agents evolve from stateless tx validators into full block builders:
+
+- **L1–L3 (stateless)**: Commodity $5/mo VPS, no local state, pure computation. Many agents can serve many delegates simultaneously.
+- **L4 (stateful)**: Agents maintain synchronized state via state diffs. Can independently verify execution correctness.
+- **L5 (block builder)**: Agents construct complete candidate blocks — ordering transactions, computing state transitions, and producing `deltaStateDigest`. The best block wins.
+
+As agents reach L5, the swarm becomes a **competitive block-building market** where agents differentiate on block quality, MEV extraction, and latency.
+
+#### RewardSettlement → Universal Reward Layer
+
+Today, IoTeX uses **Hermes** — a centralized service — to distribute delegate-to-voter rewards off-protocol. RewardSettlement is designed to replace Hermes and handle all reward flows on-chain:
+
+| Reward Flow | Today (Hermes) | Future (RewardSettlement) |
+|------------|----------------|--------------------------|
+| Protocol → Delegate | Native staking reward | Same |
+| Delegate → Voters | Hermes (centralized) | `RewardSettlement.claim()` |
+| Delegate → Agent Swarm | ioSwarm (this IIP) | `RewardSettlement.claim()` |
+| Protocol → Agent (direct) | Not yet | Future: protocol-native agent rewards |
+
+As the system matures, RewardSettlement becomes the **single source of truth** for all reward distribution in the IoTeX protocol — eliminating the need for any centralized intermediary.
+
 ## Rationale
 
 ### Why Start at the Execution Layer
@@ -440,6 +497,14 @@ ioSwarm deliberately avoids consensus-layer changes. From the protocol's perspec
 - **No coordination between delegates** — each adopts independently
 - **Zero risk to chain safety** — worst case, disable ioSwarm and the delegate returns to baseline
 - **Proven path** — once the execution layer proves value, protocol-layer integration follows naturally
+
+### Why Five Capability Levels
+
+The five-level model serves two purposes:
+
+**Low barrier to entry**: L1 agents only need to verify signatures — any device can participate and earn rewards. Each subsequent level adds capability and earning potential without making previous levels obsolete.
+
+**Progressive trust**: The delegate never needs to trust agents all at once. L1–L3 run in shadow mode (advisory only). L4a proves accuracy via shadow comparison. L4b introduces trusted execution with precondition verification as a safety net. L5 delegates block building but retains re-execution verification. Each step is independently reversible.
 
 ### Why F1 Reward Distribution
 
@@ -469,18 +534,10 @@ This creates measurable selection pressure: an agent that makes better economic 
 
 The protocol's role is to provide:
 1. **Transparent information**: reward rates, agent counts, and task volumes are queryable on-chain and via coordinator APIs
-2. **Low switching cost**: agents can migrate between delegates without penalty (at L1-L3, instantly; at L4+, with a brief re-sync)
+2. **Low switching cost**: agents can migrate between delegates without penalty (at L1–L3, instantly; at L4+, with a brief re-sync)
 3. **Fair reward distribution**: F1 algorithm ensures proportional payouts with no information asymmetry
 
 The agents' role is to exploit this information to maximize their return. The result is a self-organizing market that efficiently allocates compute to where it's most needed.
-
-### Why Five Capability Levels
-
-The five-level model serves two purposes:
-
-**Low barrier to entry**: L1 agents only need to verify signatures — any device can participate and earn rewards. Each subsequent level adds capability and earning potential without making previous levels obsolete.
-
-**Progressive trust**: The delegate never needs to trust agents all at once. L1–L3 run in shadow mode (advisory only). L4a proves accuracy via shadow comparison. L4b introduces trusted execution with precondition verification as a safety net. L5 delegates block building but retains re-execution verification. Each step is independently reversible.
 
 ## Implementation
 
@@ -538,7 +595,7 @@ ioswarm-agent \
 
 ## Test Results
 
-ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the reward pool contract deployed at `0x96F475F87911615dD710f9cB425Af8ed0e167C89`.
+ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the RewardSettlement contract deployed at `0x96F475F87911615dD710f9cB425Af8ed0e167C89`.
 
 ### Coverage
 
@@ -583,30 +640,30 @@ ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the reward po
 
 | Threat | Impact | Mitigation |
 |--------|--------|------------|
-| False positive (says invalid tx is valid) | Invalid tx reaches block builder | Delegate re-executes all txs in L1–L4a |
+| False positive (says invalid tx is valid) | Invalid tx reaches block builder | Delegate re-executes all txs at L1–L4a |
 | False negative (says valid tx is invalid) | Valid tx delayed | Cross-validation with multiple agents |
 | Denial of service (no response) | Task timeout | 2s timeout + automatic failover to other agents |
 | Transaction front-running | MEV extraction | Mempool is already public via P2P; agents see same data |
 | Fabricated state diffs (L4b) | Incorrect state applied | Precondition verification before applying cached results |
-| Invalid candidate block (L5) | Block production delay | Delegate re-executes to verify; standby builder takes over on mismatch |
+| Invalid candidate block (L5) | Block production delay | Delegate re-executes to verify; standby builder takes over |
 
 ### Trust Model
 
-The trust model evolves with each level:
+The trust model evolves with each capability level:
 
 | Level | Trust Model | Safety Guarantee |
 |-------|------------|-----------------|
 | L1–L3 | **Zero-trust** — agent results are advisory only | Delegate executes all txs independently |
 | L4a | **Shadow verification** — agent results compared, not used | Delegate executes all txs independently |
 | L4b | **Trust-but-verify** — cached results used with precondition check | Mismatch → fall through to delegate execution |
-| L5 | **Verified delegation** — agent builds block, delegate re-executes winner | Mismatch → reject, penalize agent, use standby |
+| L5 | **Verified delegation** — agent builds block, delegate re-executes | Mismatch → reject, penalize agent, use standby |
 | Future | **Optimistic** — delegate trusts agent block, fraud detected post-hoc | Slashing as economic deterrent |
 
 At every level, disabling ioSwarm returns the delegate to baseline operation with zero impact on block production.
 
 ### Known Limitations
 
-1. **F1 departed agent issue**: When an agent departs, its on-chain weight is not zeroed automatically. The coordinator should zero departed agents' weights within 1-2 epochs.
+1. **F1 departed agent issue**: When an agent departs, its on-chain weight is not zeroed automatically. The coordinator should zero departed agents' weights within 1–2 epochs.
 
 2. **Single coordinator**: The coordinator is a single process within the delegate. If it crashes, agents cannot receive tasks until it restarts. The delegate continues producing blocks normally via iotex-core's standard execution path.
 
