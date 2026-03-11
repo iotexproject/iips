@@ -703,6 +703,23 @@ ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the RewardSet
 | Transaction front-running | MEV extraction | Mempool is already public via P2P; agents see same data |
 | Fabricated state diffs (L4b) | Incorrect state applied | Precondition verification before applying cached results |
 | Invalid candidate block (L5) | Block production delay | Delegate re-executes to verify; standby builder takes over |
+| Sybil attack (many fake identities) | Occupy `maxAgents` slots, crowd out honest agents | API key authentication + delegate-controlled admission (see below) |
+
+### Sybil Resistance and Agent Admission
+
+ioSwarm is **not a public permissionless protocol** — it is a set of private services operated by each delegate independently. Each delegate's coordinator controls its own agent admission:
+
+- **API key authentication**: Agents authenticate via HMAC-SHA256 API keys. The delegate generates and distributes keys to agents it trusts. An attacker cannot register without a valid key.
+- **Delegate autonomy**: Each delegate decides its own admission policy — open registration, invite-only, staking requirement, KYC, or any combination. The protocol does not mandate a single approach.
+- **Rate limiting**: The coordinator enforces per-agent rate limits (10 req/s, burst 20) and evicts agents that exceed them.
+- **`maxAgents` as defense**: The `maxAgents` cap (default 100) bounds the coordinator's resource exposure. Combined with API key auth, an attacker must compromise 100 keys to fill all slots.
+
+This is analogous to how Ethereum validators choose which MEV-Boost relays to trust, or how mining pools choose which miners to admit. The trust relationship is between the delegate and its agents, not between the protocol and agents. Each delegate bears the cost of its own swarm and has full economic incentive to prevent abuse.
+
+For delegates that want open registration (no API key), additional defenses are available:
+- **Minimum stake**: Require agents to deposit a small IOTX bond (refundable on graceful exit, slashed on misbehavior)
+- **Proof of work**: Require a computational puzzle at registration to raise Sybil cost
+- **Reputation scoring**: Weight rewards by historical accuracy, naturally penalizing new/untrusted agents
 
 ### Trust Model
 
@@ -717,6 +734,31 @@ The trust model evolves with each capability level:
 | Future | **Optimistic** — delegate trusts agent block, fraud detected post-hoc | Slashing as economic deterrent |
 
 At every level, disabling ioSwarm returns the delegate to baseline operation with zero impact on block production.
+
+### Shadow Mode Economics
+
+A valid concern: at L1–L4a, agents perform redundant computation — the delegate re-executes all transactions independently regardless of agent results. Why pay agents for work the delegate discards?
+
+**Shadow mode is not wasted computation. It is a paid proving ground.**
+
+The cost of shadow mode is low and deliberate:
+
+| | Shadow Mode (L1–L4a) | Active Mode (L4b–L5) |
+|---|---|---|
+| **Agent cost** | $5–10/mo VPS | Same |
+| **Delegate cost** | Epoch rewards (~0.5 IOTX/30s) | Same, but delegate CPU drops |
+| **What delegate gains** | Accuracy data: does this agent match my execution 100%? | Actual CPU offload, block building |
+| **What agent gains** | Reputation + rewards | Higher rewards |
+
+The delegate pays a small amount to answer a critical question: **can I trust this agent?** Without shadow mode, the delegate would have to trust agents from day one (unsafe) or never trust them at all (no path to L4b/L5). Shadow mode is the bridge.
+
+The reward during shadow mode is funded by the delegate's own epoch reward — not by protocol inflation. Each delegate chooses how much to allocate. A delegate that sees no value can set `epochRewardIOTX: 0` and disable ioSwarm entirely. This is not a protocol-level subsidy; it is a delegate-level investment in building a verified agent workforce.
+
+The transition out of shadow mode is the payoff:
+- **L4b**: Agent results feed into the delegate's execution cache → delegate skips re-execution for cache hits → measurable CPU savings
+- **L5**: Agent builds the entire block → delegate only re-executes to verify → massive CPU reduction
+
+Shadow mode is a cost. But it is a **one-time proving cost** per agent, not a permanent overhead. Once an agent achieves 100% accuracy over a sufficient shadow period, it graduates to active mode where its work directly reduces the delegate's load.
 
 ### Known Limitations
 
