@@ -517,6 +517,29 @@ Today, IoTeX uses **Hermes** — a centralized service — to distribute delegat
 
 As the system matures, RewardSettlement becomes the **single source of truth** for all reward distribution in the IoTeX protocol — eliminating the need for any centralized intermediary.
 
+#### MEV and the Case for Decentralized Block Building
+
+A common objection to decentralized block building is that MEV (Maximal Extractable Value) inevitably centralizes builders. Ethereum's experience supports this: 3–5 specialized builders dominate >90% of blocks because MEV extraction rewards the best algorithms, lowest latency, and most capital. Why would IoTeX be different?
+
+**Short answer: IoTeX today has minimal MEV, and ioSwarm is designed to keep it that way in Phase 1.** The delegate specifies transaction ordering via an inclusion list — agents execute in that order without reordering. This eliminates front-running, sandwich attacks, and the MEV extraction that drives centralization in Ethereum's builder market.
+
+**Longer answer: when MEV does emerge, a decentralized swarm has structural advantages over a centralized builder oligopoly.**
+
+In traditional MEV markets, the "best algorithm" is a fixed target — whoever invests the most in low-latency infrastructure and quant teams wins permanently. But as MEV strategies become more complex and adversarial, the search space grows combinatorially. This is precisely the regime where **distributed exploration outperforms centralized optimization**:
+
+| MEV Regime | Centralized Builders (Ethereum) | Decentralized Swarm (ioSwarm) |
+|-----------|-------------------------------|------------------------------|
+| **Simple arbitrage** (DEX price gaps) | Winner-take-all: fastest bot wins | Same — no advantage from decentralization |
+| **Complex MEV** (cross-protocol, multi-block) | Diminishing returns: one team's search is bounded | Thousands of agents exploring different strategies in parallel |
+| **Adversarial MEV** (strategy vs. counter-strategy) | Arms race between few players, high barrier | Evolutionary pressure across a large population — more diverse strategies survive |
+| **Novel MEV** (new DeFi protocols, new patterns) | Slow to adapt: specialized teams have institutional inertia | Fast adaptation: any agent can try a new approach, market rewards success instantly |
+
+The key insight: in a large, diverse agent population, the **aggregate intelligence** of thousands of independent strategies can exceed the intelligence of any single team. This is the same principle that makes markets more efficient than central planning — and it applies to MEV extraction just as it applies to price discovery.
+
+ioSwarm's Phase 1 (no agent reordering) buys time for the agent ecosystem to mature. When Phase 2 introduces controlled reordering, the competitive landscape will be shaped by thousands of agents with diverse strategies, not a handful of incumbents. The protocol's reward structure (70% primary / 20% participation / 10% standby) further ensures that even non-winning agents earn rewards for participation, preventing the pure winner-take-all dynamic that centralizes Ethereum's builder market.
+
+**This is not a solved problem.** MEV centralization is an active area of research across the industry. ioSwarm's contribution is structural: a permissionless, low-barrier agent network provides more fertile ground for decentralized MEV solutions than a high-barrier, capital-intensive builder market.
+
 ## Rationale
 
 ### Why Start at the Execution Layer
@@ -551,23 +574,27 @@ Alternatives considered:
 
 ### Why Autonomous Agent Economics
 
-The "AI" in ioSwarm is not about bolting a language model onto a validator. It is about creating an economic environment where **intelligent behavior is rewarded**.
+The "AI" in ioSwarm is not about bolting a language model onto a validator. It is about creating an economic environment where **intelligent behavior is rewarded** — and where the complexity of that intelligence grows with the system.
 
-Traditional blockchain nodes are statically configured — connect to one network, execute whatever arrives, collect whatever is paid. There is no decision-making, no optimization, no reason for the node to be "smart." ioSwarm changes this by introducing a **multi-dimensional optimization problem** that agents must solve:
+A fair objection: the delegate selection formula (`epoch_reward × (1 - delegate_cut) / num_agents`) is basic arithmetic, not artificial intelligence. At L1–L3, this is true — an agent optimizing across 36 delegates is closer to a routing script than an AI system.
 
-- 36 delegates with varying reward rates (changes per epoch)
-- 5 capability levels with different cost/reward profiles
-- Variable gas costs affecting claim timing
-- Hardware constraints affecting which levels are profitable
+But this is the **starting point**, not the ceiling. Agent intelligence deepens as the system evolves:
 
-This creates measurable selection pressure: an agent that makes better economic decisions earns more IOTX per dollar of compute. Over time, this pressure drives the agent ecosystem toward increasingly sophisticated optimization — from simple heuristics to learned policies — without the protocol prescribing any specific approach.
+| Phase | Decision Complexity | Intelligence Required |
+|-------|--------------------|-----------------------|
+| **L1–L3 (today)** | Which delegate? Which level? When to claim? | Rule-based heuristics — a static script can do this |
+| **L4 (stateful)** | Above + state sync strategy, catch-up vs re-snapshot tradeoffs, multi-delegate state management | Adaptive optimization — agents must respond to changing network conditions |
+| **L5 (block building)** | Above + transaction ordering, gas optimization, block composition strategy | Competitive strategy — agents compete directly on block quality |
+| **L5 + MEV** | Above + MEV extraction, cross-protocol arbitrage, adversarial strategy | Emergent intelligence — the search space is combinatorial; no closed-form solution exists |
 
-The protocol's role is to provide:
+At L5 with MEV, the optimization problem becomes genuinely hard: the agent must decide which transactions to include, in what order, whether to insert its own transactions, how to balance MEV extraction against the risk of block rejection, and how to adapt its strategy as competitors counter it. This is a **multi-agent adversarial optimization problem** — the kind of problem where reinforcement learning, game-theoretic reasoning, and learned policies demonstrably outperform hand-coded heuristics.
+
+The protocol does not prescribe any specific approach. It provides the economic environment:
 1. **Transparent information**: reward rates, agent counts, and task volumes are queryable on-chain and via coordinator APIs
 2. **Low switching cost**: agents can migrate between delegates without penalty (at L1–L3, instantly; at L4+, with a brief re-sync)
 3. **Fair reward distribution**: F1 algorithm ensures proportional payouts with no information asymmetry
 
-The agents' role is to exploit this information to maximize their return. The result is a self-organizing market that efficiently allocates compute to where it's most needed.
+The agents' role is to exploit this information to maximize their return. A "dumb" agent uses static rules. A "smart" agent learns and adapts. The protocol doesn't care which — it measures intelligence by economic performance, and the market rewards the better agent. Over time, the competitive pressure drives the agent ecosystem toward increasingly sophisticated strategies — from scripts to learned policies to genuine autonomous economic reasoning.
 
 ## Implementation
 
