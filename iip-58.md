@@ -26,13 +26,13 @@ Execution Layer    decide WHAT goes into the block (tx validation, EVM execution
 
 In most chains — including IoTeX today — both layers run on the same machine, operated by the same entity. Separating them has been a recurring theme in blockchain architecture:
 
-| Milestone | What It Separates | How |
-|-----------|------------------|-----|
-| **Ethereum's Merge** | Consensus client from execution client | Two separate programs, but still on the **same operator's machine** |
-| **Ethereum's ePBS** ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) | Proposer from Builder (within block production) | Specialized builders construct blocks; validators just sign. But builders are **few and centralized** (3–5 dominant firms) |
-| **ioSwarm** | Consensus layer from execution layer | Execution moves to a **permissionless network** of thousands of independent agents |
+| Milestone | What It Separates | How | Key EIPs |
+|-----------|------------------|-----|----------|
+| **Ethereum's Merge (2022)** | Consensus client from execution client | Two separate programs communicating via Engine API, but still on the **same operator's machine** | [EIP-3675](https://eips.ethereum.org/EIPS/eip-3675) (PoS transition), [Engine API](https://github.com/ethereum/execution-apis) (consensus↔execution interface), [EIP-4399](https://eips.ethereum.org/EIPS/eip-4399) (PREVRANDAO) |
+| **Ethereum's ePBS** | Proposer from Builder (within block production) | Specialized builders construct blocks; validators just sign. But builders are **few and centralized** (3–5 dominant firms) | [EIP-7732](https://eips.ethereum.org/EIPS/eip-7732) (ePBS), [EIP-7898](https://eips.ethereum.org/EIPS/eip-7898) (uncouple execution payload) |
+| **ioSwarm** | Consensus layer from execution layer | Execution moves to a **permissionless network** of thousands of independent agents | This IIP |
 
-ioSwarm takes this separation further than either: the execution layer is not a different process on the same machine (Merge), nor a handful of specialized firms (ePBS). It is an **open, decentralized network** of commodity agents — anyone with a $5/mo VPS can join, perform execution work, and earn rewards.
+Ethereum's Merge took years and dozens of EIPs to achieve consensus-execution separation at the *process* level — splitting one monolithic Geth client into a Beacon Chain consensus client (Prysm, Lighthouse, etc.) and an execution client (Geth, Reth, etc.) connected via the Engine API. ioSwarm takes the next step: separating them at the *network* level. The execution layer is not just a different process on the same machine, but an **open, decentralized network** of commodity agents — anyone with a $5/mo VPS can join, perform execution work, and earn rewards.
 
 | | Ethereum ePBS | IoTeX ioSwarm |
 |---|---|---|
@@ -701,10 +701,20 @@ At every level, disabling ioSwarm returns the delegate to baseline operation wit
 
 ## References
 
+### Ethereum Consensus-Execution Separation
+- [EIP-3675: Upgrade consensus to Proof-of-Stake](https://eips.ethereum.org/EIPS/eip-3675) — The Merge: formal transition from PoW to Beacon Chain consensus
+- [Engine API](https://github.com/ethereum/execution-apis) — authenticated JSON-RPC interface connecting consensus clients to execution clients
+- [EIP-4399: Supplant DIFFICULTY opcode with PREVRANDAO](https://eips.ethereum.org/EIPS/eip-4399) — execution-layer adaptation for PoS randomness
+- [Ethereum Merge Overview](https://ethereum.org/roadmap/merge/)
+
+### Proposer-Builder Separation
 - [EIP-7732: Enshrined Proposer-Builder Separation](https://eips.ethereum.org/EIPS/eip-7732)
-- [F1 Fee Distribution (Ojha & Goes, Tokenomics 2019)](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf) — used by Cosmos SDK for staking reward distribution
-- [Ethereum PBS Roadmap](https://ethereum.org/roadmap/pbs)
+- [EIP-7898: Uncouple execution payload from beacon block](https://eips.ethereum.org/EIPS/eip-7898)
 - [EIP-7805: FOCIL (Fork-Choice Enforced Inclusion Lists)](https://eips.ethereum.org/EIPS/eip-7805)
+- [Ethereum PBS Roadmap](https://ethereum.org/roadmap/pbs)
+
+### Reward Distribution
+- [F1 Fee Distribution (Ojha & Goes, Tokenomics 2019)](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf) — used by Cosmos SDK for staking reward distribution
 
 ## Copyright
 
