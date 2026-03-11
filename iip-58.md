@@ -123,9 +123,109 @@ The on-chain reward contract (renamed from "AgentRewardPool") is designed to rep
 
 The F1 cumulative reward-per-weight algorithm enables O(1) reward calculation regardless of agent count. As the system matures, RewardSettlement becomes the **single source of truth** for all reward distribution in the IoTeX protocol — eliminating the need for any centralized intermediary.
 
-### Five Capability Levels (L1 → L5)
+---
 
-Agents progress through five levels of increasing capability. Each level defines what the **Coordinator**, **Agent**, and **On-chain Contract** must do.
+### Component 1: Delegate + Coordinator
+
+The delegate runs iotex-core with the coordinator as an embedded sidecar module. It is responsible for consensus, state management, task dispatch, and — at higher levels — state provisioning to agents.
+
+#### Coordinator-Agent Protocol
+
+The coordinator and agents communicate via gRPC with server-side streaming:
+
+1. **Register**: Agent connects, provides capability level, region, and reward wallet address. Coordinator returns heartbeat interval.
+2. **GetTasks** (server stream): Coordinator pushes `TaskBatch` messages containing pending transactions with pre-fetched state (L1–L3) or block context (L5).
+3. **SubmitResults**: Agent returns validation results per task (valid/invalid, gas used, state changes, reject reason).
+4. **Heartbeat**: Periodic keep-alive with payout notifications. Agents that miss 6 consecutive heartbeats are evicted.
+5. **(L4+) StreamStateDiffs**: Server stream pushing incremental state changesets per block with chained state hashes.
+6. **(L4+) DownloadSnapshot**: Agent requests full EVM state snapshot at cold start or after state divergence.
+7. **(L5) SubmitCandidateBlock**: Agent submits a fully built candidate block for delegate verification.
+
+Authentication uses HMAC-SHA256: `api_key = "iosw_" + hex(HMAC-SHA256(masterSecret, agentID))`.
+
+#### State Provisioning (L4+)
+
+At L1–L3, agents are stateless — the coordinator prefetches per-tx state snapshots and sends them with each task. At L4+, agents maintain full EVM state locally. The coordinator provisions this state via two mechanisms:
+
+**Cold Start — State Snapshot**
+
+The coordinator exports a flat KV dump of the 3 EVM-relevant namespaces:
+
+| Namespace | Content | Size Estimate |
+|-----------|---------|---------------|
+| **Account** | All accounts: nonce, balance, codeHash, storageRoot | ~50–100 MB |
+| **Code** | Contract bytecode, keyed by codeHash | ~50–100 MB |
+| **Contract** | Contract storage slots (per-contract) | ~200 MB – 1 GB |
+
+Only 3 of 10+ namespaces in IoTeX's state database are needed. Staking, Rewarding, Candidate, and other native protocol state is irrelevant to EVM execution.
+
+```
+snapshot = {
+    height:          uint64,
+    post_state_hash: hash,
+    accounts:        map[address → Account],
+    code:            map[codeHash → bytecode],
+    storage:         map[(address, slot) → value],
+}
+```
+
+Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Trivially downloadable on a $5/mo VPS.
+
+**Incremental Sync — State Diffs per Block**
+
+Every block, the coordinator broadcasts the state changeset to all connected L4+ agents:
+
+```
+state_diff = {
+    height:          uint64,
+    prev_state_hash: hash,   // agent's state BEFORE applying this diff
+    post_state_hash: hash,   // expected state AFTER applying this diff
+    block_context:   { timestamp, gas_limit, base_fee, prev_block_hash },
+    changes:         [(namespace, key, old_value, new_value)],  // ordered
+}
+```
+
+The changeset already exists in memory during `workingset.go`'s `Commit()` — captured from `flusher.SerializeQueue()` with zero additional computation.
+
+**State Diff Reliability**
+
+State diff reliability is the **#1 engineering risk**. If an agent misses a single diff, every subsequent execution produces wrong results.
+
+Every diff carries `prev_state_hash` and `post_state_hash` forming a chain — analogous to `prevBlockHash` in blocks. After applying each diff, the agent verifies:
+
+```
+apply(diff)
+local_hash = hash(local_state)
+if local_hash != diff.post_state_hash:
+    // STATE DIVERGENCE — request resync
+```
+
+Recovery (in priority order):
+1. Request missing diff range from coordinator's rolling buffer (last ~100 blocks)
+2. Incremental re-snapshot (only changed KV pairs since last known good height)
+3. Full re-snapshot (last resort)
+
+#### Key Design Advantage: deltaStateDigest
+
+IoTeX's block header contains `deltaStateDigest` — a hash of the ordered state change queue, **not** a Merkle Trie root. This is a structural advantage over Ethereum: L4/L5 agents do not need to maintain a full Merkle Patricia Trie. A flat key-value store with ordered write tracking is sufficient to compute the correct state digest. This keeps agent state requirements at ~300 MB–1.2 GB (vs Ethereum's ~245 GiB), making block building feasible on commodity hardware.
+
+#### Configuration Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `epochRewardIOTX` | `0.5` | IOTX reward per epoch |
+| `delegateCutPct` | `10` | Delegate's percentage of epoch reward |
+| `epochBlocks` | `3` | Blocks per epoch (safety floor: 30s) |
+| `minTasksForReward` | `1` | Minimum tasks to qualify for rewards |
+| `bonusAccuracyPct` | `99.5` | Accuracy threshold for weight bonus |
+| `bonusMultiplier` | `1.2` | Weight multiplier for high-accuracy agents |
+| `maxAgents` | `100` | Maximum registered agents per delegate |
+
+---
+
+### Component 2: Agent Swarm — Five Capability Levels
+
+Agents are independent processes that connect to any delegate's coordinator, perform validation or block building work, and earn IOTX rewards. They progress through five levels of increasing capability. Each level defines what the **Coordinator**, **Agent**, and **On-chain Contract** must do.
 
 #### L1 — Per-Tx Signature Verification
 
@@ -181,7 +281,7 @@ L4 is divided into two sub-phases:
 
 Follows Ethereum's ePBS model ([EIP-7732](https://eips.ethereum.org/EIPS/eip-7732)) adapted for IoTeX's DPoS: delegate = proposer, agent = builder, coordinator = relay.
 
-### Summary: Components × Levels
+#### Summary: Components × Levels
 
 | | **Coordinator** | **Agent** | **On-chain Contract** |
 |---|---|---|---|
@@ -192,21 +292,84 @@ Follows Ethereum's ePBS model ([EIP-7732](https://eips.ethereum.org/EIPS/eip-773
 | **L4b** | + Feed agent results to exec cache | + Full-state EVM (active) | Same |
 | **L5** | + Assign builder roles, receive candidate blocks | + Build entire block | + Primary/standby reward split |
 
-### Coordinator-Agent Protocol
+#### Autonomous Agent Economics
 
-The coordinator and agents communicate via gRPC with server-side streaming:
+Agents operate in an open market of 36 delegates, each offering different reward conditions. An intelligent agent continuously optimizes three dimensions:
 
-1. **Register**: Agent connects, provides capability level, region, and reward wallet address. Coordinator returns heartbeat interval.
-2. **GetTasks** (server stream): Coordinator pushes `TaskBatch` messages containing pending transactions with pre-fetched state (L1–L3) or block context (L5).
-3. **SubmitResults**: Agent returns validation results per task (valid/invalid, gas used, state changes, reject reason).
-4. **Heartbeat**: Periodic keep-alive with payout notifications. Agents that miss 6 consecutive heartbeats are evicted.
-5. **(L4+) StreamStateDiffs**: Server stream pushing incremental state changesets per block with chained state hashes.
-6. **(L4+) DownloadSnapshot**: Agent requests full EVM state snapshot at cold start or after state divergence.
-7. **(L5) SubmitCandidateBlock**: Agent submits a fully built candidate block for delegate verification.
+##### 1. Delegate Selection (Where to Work)
 
-Authentication uses HMAC-SHA256: `api_key = "iosw_" + hex(HMAC-SHA256(masterSecret, agentID))`.
+Each delegate runs an independent coordinator with its own reward pool, agent count, and task volume. The effective reward rate per agent depends on all three:
 
-### Reward Distribution
+```
+effective_rate(delegate) = epoch_reward × (1 - delegate_cut) / num_agents
+```
+
+An agent that monitors all 36 delegates can identify underserved delegates (few agents, high reward) and migrate. As agents migrate toward higher-paying delegates, the market self-balances.
+
+**Discovery mechanism**: Agents query on-chain delegate registry for active coordinators, then probe each coordinator's `/swarm/status` endpoint for current agent count and reward parameters.
+
+**Migration cost**: Switching delegates at L1-L3 is free (stateless). At L4+, the agent must re-download a state snapshot (~1 min for 1 GB), making frequent migration more expensive. This natural friction prevents oscillation.
+
+##### 2. Level Selection (How to Work)
+
+Each level requires different resources and earns different reward weight:
+
+| Level | Compute Cost | Storage | Reward Weight | Typical Hardware |
+|-------|-------------|---------|---------------|------------------|
+| L1 | ~0 | 0 | 1x | Any device |
+| L2 | ~0 | 0 | 1x | Any device |
+| L3 | Low CPU | 0 | 2-3x | $5/mo VPS |
+| L4 | Medium CPU | ~1 GB | 5-10x | $10/mo VPS |
+| L5 | High CPU | ~1 GB | 10-20x | $10-20/mo VPS |
+
+An agent evaluates: "At my hardware cost, which level maximizes `(reward_weight × effective_rate) - operating_cost`?"
+
+A Raspberry Pi agent might optimally run L1-L2 for multiple delegates simultaneously, earning small amounts from each with near-zero cost. A dedicated VPS agent runs L4 for one delegate, earning more per task but with higher fixed costs.
+
+##### 3. Claim Timing (When to Collect)
+
+The `claim()` transaction costs gas (~0.03 IOTX). An agent that claims every epoch wastes gas on small amounts. An intelligent agent:
+
+- Accumulates rewards across multiple epochs
+- Monitors gas prices and claims during low-fee periods
+- Batches claim timing with other on-chain operations
+
+##### Economic Example
+
+```
+Market conditions:
+  Delegate A: 0.8 IOTX/epoch, 80 agents, delegate cut 10%
+  Delegate B: 0.5 IOTX/epoch, 5 agents, delegate cut 15%
+  Delegate C: 1.0 IOTX/epoch, 50 agents, delegate cut 5%
+
+Effective rate per agent per epoch:
+  A: 0.8 × 0.9 / 80 = 0.009 IOTX
+  B: 0.5 × 0.85 / 5 = 0.085 IOTX    ← 9x better than A
+  C: 1.0 × 0.95 / 50 = 0.019 IOTX
+
+A "dumb" agent randomly picks A:          0.009 IOTX/epoch
+An intelligent agent picks B:             0.085 IOTX/epoch
+                                          ────────────────
+                                          9.4x difference
+```
+
+This reward differential is what drives agents toward intelligent behavior. The protocol does not mandate any specific strategy — it provides the economic environment, and agents evolve their own optimization approaches: rule-based heuristics, multi-armed bandit algorithms, or more sophisticated learned policies.
+
+##### Market Dynamics
+
+As agents optimize, the system reaches a competitive equilibrium:
+
+1. **Reward equalization**: Agents migrate toward high-rate delegates → rates equalize across delegates
+2. **Level efficiency**: Agents select the level where their marginal revenue exceeds marginal cost → each level finds its natural agent population
+3. **Quality pressure**: Delegates can adjust reward weights to favor higher-level agents → agents invest in capability upgrades
+
+This is a genuine multi-agent market, not a static assignment. The "intelligence" of agents is measured by their economic performance — return on invested compute — which is observable, quantifiable, and improvable over time.
+
+---
+
+### Component 3: RewardSettlement (On-Chain)
+
+RewardSettlement is the on-chain contract that handles all reward distribution between coordinators and agents. It replaces the need for any centralized intermediary (such as Hermes) by providing trustless, self-service reward claiming.
 
 #### Reward Flow
 
@@ -266,95 +429,6 @@ On claim:
 ```
 
 This enables **O(1) reward calculation** regardless of agent count — no iteration over all agents needed. Adding agents, updating weights, and claiming all take constant gas.
-
-### Configuration Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `epochRewardIOTX` | `0.5` | IOTX reward per epoch |
-| `delegateCutPct` | `10` | Delegate's percentage of epoch reward |
-| `epochBlocks` | `3` | Blocks per epoch (safety floor: 30s) |
-| `minTasksForReward` | `1` | Minimum tasks to qualify for rewards |
-| `bonusAccuracyPct` | `99.5` | Accuracy threshold for weight bonus |
-| `bonusMultiplier` | `1.2` | Weight multiplier for high-accuracy agents |
-| `maxAgents` | `100` | Maximum registered agents per delegate |
-
-### Key Design Advantage: deltaStateDigest
-
-IoTeX's block header contains `deltaStateDigest` — a hash of the ordered state change queue, **not** a Merkle Trie root. This is a structural advantage over Ethereum: L4/L5 agents do not need to maintain a full Merkle Patricia Trie. A flat key-value store with ordered write tracking is sufficient to compute the correct state digest. This keeps agent state requirements at ~300 MB–1.2 GB (vs Ethereum's ~245 GiB), making block building feasible on commodity hardware.
-
-### Autonomous Agent Economics
-
-Agents operate in an open market of 36 delegates, each offering different reward conditions. An intelligent agent continuously optimizes three dimensions:
-
-#### 1. Delegate Selection (Where to Work)
-
-Each delegate runs an independent coordinator with its own reward pool, agent count, and task volume. The effective reward rate per agent depends on all three:
-
-```
-effective_rate(delegate) = epoch_reward × (1 - delegate_cut) / num_agents
-```
-
-An agent that monitors all 36 delegates can identify underserved delegates (few agents, high reward) and migrate. As agents migrate toward higher-paying delegates, the market self-balances.
-
-**Discovery mechanism**: Agents query on-chain delegate registry for active coordinators, then probe each coordinator's `/swarm/status` endpoint for current agent count and reward parameters.
-
-**Migration cost**: Switching delegates at L1-L3 is free (stateless). At L4+, the agent must re-download a state snapshot (~1 min for 1 GB), making frequent migration more expensive. This natural friction prevents oscillation.
-
-#### 2. Level Selection (How to Work)
-
-Each level requires different resources and earns different reward weight:
-
-| Level | Compute Cost | Storage | Reward Weight | Typical Hardware |
-|-------|-------------|---------|---------------|------------------|
-| L1 | ~0 | 0 | 1x | Any device |
-| L2 | ~0 | 0 | 1x | Any device |
-| L3 | Low CPU | 0 | 2-3x | $5/mo VPS |
-| L4 | Medium CPU | ~1 GB | 5-10x | $10/mo VPS |
-| L5 | High CPU | ~1 GB | 10-20x | $10-20/mo VPS |
-
-An agent evaluates: "At my hardware cost, which level maximizes `(reward_weight × effective_rate) - operating_cost`?"
-
-A Raspberry Pi agent might optimally run L1-L2 for multiple delegates simultaneously, earning small amounts from each with near-zero cost. A dedicated VPS agent runs L4 for one delegate, earning more per task but with higher fixed costs.
-
-#### 3. Claim Timing (When to Collect)
-
-The `claim()` transaction costs gas (~0.03 IOTX). An agent that claims every epoch wastes gas on small amounts. An intelligent agent:
-
-- Accumulates rewards across multiple epochs
-- Monitors gas prices and claims during low-fee periods
-- Batches claim timing with other on-chain operations
-
-#### Economic Example
-
-```
-Market conditions:
-  Delegate A: 0.8 IOTX/epoch, 80 agents, delegate cut 10%
-  Delegate B: 0.5 IOTX/epoch, 5 agents, delegate cut 15%
-  Delegate C: 1.0 IOTX/epoch, 50 agents, delegate cut 5%
-
-Effective rate per agent per epoch:
-  A: 0.8 × 0.9 / 80 = 0.009 IOTX
-  B: 0.5 × 0.85 / 5 = 0.085 IOTX    ← 9x better than A
-  C: 1.0 × 0.95 / 50 = 0.019 IOTX
-
-A "dumb" agent randomly picks A:          0.009 IOTX/epoch
-An intelligent agent picks B:             0.085 IOTX/epoch
-                                          ────────────────
-                                          9.4x difference
-```
-
-This reward differential is what drives agents toward intelligent behavior. The protocol does not mandate any specific strategy — it provides the economic environment, and agents evolve their own optimization approaches: rule-based heuristics, multi-armed bandit algorithms, or more sophisticated learned policies.
-
-#### Market Dynamics
-
-As agents optimize, the system reaches a competitive equilibrium:
-
-1. **Reward equalization**: Agents migrate toward high-rate delegates → rates equalize across delegates
-2. **Level efficiency**: Agents select the level where their marginal revenue exceeds marginal cost → each level finds its natural agent population
-3. **Quality pressure**: Delegates can adjust reward weights to favor higher-level agents → agents invest in capability upgrades
-
-This is a genuine multi-agent market, not a static assignment. The "intelligence" of agents is measured by their economic performance — return on invested compute — which is observable, quantifiable, and improvable over time.
 
 ## Rationale
 
