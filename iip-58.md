@@ -31,13 +31,23 @@ ioSwarm achieves massive decentralization by turning each delegate into a **coor
 
 ### Not Just More Nodes — Smarter Nodes
 
-The nodes joining ioSwarm are not passive validators replaying the same work — they are **AI agents** with increasing levels of intelligence:
+The nodes joining ioSwarm are not passive validators replaying the same work. They are **autonomous economic agents** — programs that hold wallets, earn income, and make their own decisions about where and how to work.
 
-**Today:** Agents validate transactions — signature checks, state verification, EVM execution. They are workers following instructions.
+What makes them "AI agents" and not just "programs"? A traditional validator is statically configured: connect to one node, execute whatever it receives, collect whatever it's paid. An ioSwarm agent operates in a **multi-delegate, multi-level, dynamic-reward market** and must continuously make economic decisions to maximize its return:
 
-**Tomorrow:** Agents maintain full chain state, achieve 100% execution accuracy, and build entire blocks on behalf of delegates.
+- **36 delegates** compete for agent labor with different reward rates, task volumes, and reliability
+- **5 capability levels** offer different reward/cost tradeoffs — an agent running on a Raspberry Pi makes different choices than one on a GPU server
+- **Reward rates change** as agents join, leave, and shift between delegates
+- **Gas costs fluctuate**, affecting when to claim rewards
+- **Hardware constraints vary**, affecting which levels are profitable
 
-**The Endgame:** AI agents don't just run the chain — they **live on it**. They hold wallets, pay gas, own assets, make decisions. Delegates don't hire agents; agents choose which delegates to work for based on reputation, reward rates, and alignment. The chain becomes an environment where autonomous AI agents are first-class economic actors alongside humans.
+A "dumb" agent that statically connects to one delegate at one level will earn far less than an intelligent agent that continuously optimizes across this decision space. The difference is not marginal — it can be 5-10x in real economic terms. This optimization pressure is what drives agents toward genuine autonomous intelligence: observing the market, reasoning about tradeoffs, and acting on their conclusions.
+
+**Today:** Agents validate transactions for a single delegate. They are workers following instructions.
+
+**Tomorrow:** Agents maintain full chain state, build entire blocks, and autonomously select which delegates to work for based on real-time reward economics.
+
+**The Endgame:** A competitive market of thousands of autonomous agents, each running its own economic strategy, collectively operating the IoTeX execution layer more efficiently than any fixed set of 36 machines ever could.
 
 ## Specification
 
@@ -234,6 +244,79 @@ This enables **O(1) reward calculation** regardless of agent count — no iterat
 
 IoTeX's block header contains `deltaStateDigest` — a hash of the ordered state change queue, **not** a Merkle Trie root. This is a structural advantage over Ethereum: L4/L5 agents do not need to maintain a full Merkle Patricia Trie. A flat key-value store with ordered write tracking is sufficient to compute the correct state digest. This keeps agent state requirements at ~300 MB–1.2 GB (vs Ethereum's ~245 GiB), making block building feasible on commodity hardware.
 
+### Autonomous Agent Economics
+
+Agents operate in an open market of 36 delegates, each offering different reward conditions. An intelligent agent continuously optimizes three dimensions:
+
+#### 1. Delegate Selection (Where to Work)
+
+Each delegate runs an independent coordinator with its own reward pool, agent count, and task volume. The effective reward rate per agent depends on all three:
+
+```
+effective_rate(delegate) = epoch_reward × (1 - delegate_cut) / num_agents
+```
+
+An agent that monitors all 36 delegates can identify underserved delegates (few agents, high reward) and migrate. As agents migrate toward higher-paying delegates, the market self-balances.
+
+**Discovery mechanism**: Agents query on-chain delegate registry for active coordinators, then probe each coordinator's `/swarm/status` endpoint for current agent count and reward parameters.
+
+**Migration cost**: Switching delegates at L1-L3 is free (stateless). At L4+, the agent must re-download a state snapshot (~1 min for 1 GB), making frequent migration more expensive. This natural friction prevents oscillation.
+
+#### 2. Level Selection (How to Work)
+
+Each level requires different resources and earns different reward weight:
+
+| Level | Compute Cost | Storage | Reward Weight | Typical Hardware |
+|-------|-------------|---------|---------------|------------------|
+| L1 | ~0 | 0 | 1x | Any device |
+| L2 | ~0 | 0 | 1x | Any device |
+| L3 | Low CPU | 0 | 2-3x | $5/mo VPS |
+| L4 | Medium CPU | ~1 GB | 5-10x | $10/mo VPS |
+| L5 | High CPU | ~1 GB | 10-20x | $10-20/mo VPS |
+
+An agent evaluates: "At my hardware cost, which level maximizes `(reward_weight × effective_rate) - operating_cost`?"
+
+A Raspberry Pi agent might optimally run L1-L2 for multiple delegates simultaneously, earning small amounts from each with near-zero cost. A dedicated VPS agent runs L4 for one delegate, earning more per task but with higher fixed costs.
+
+#### 3. Claim Timing (When to Collect)
+
+The `claim()` transaction costs gas (~0.03 IOTX). An agent that claims every epoch wastes gas on small amounts. An intelligent agent:
+
+- Accumulates rewards across multiple epochs
+- Monitors gas prices and claims during low-fee periods
+- Batches claim timing with other on-chain operations
+
+#### Economic Example
+
+```
+Market conditions:
+  Delegate A: 0.8 IOTX/epoch, 80 agents, delegate cut 10%
+  Delegate B: 0.5 IOTX/epoch, 5 agents, delegate cut 15%
+  Delegate C: 1.0 IOTX/epoch, 50 agents, delegate cut 5%
+
+Effective rate per agent per epoch:
+  A: 0.8 × 0.9 / 80 = 0.009 IOTX
+  B: 0.5 × 0.85 / 5 = 0.085 IOTX    ← 9x better than A
+  C: 1.0 × 0.95 / 50 = 0.019 IOTX
+
+A "dumb" agent randomly picks A:          0.009 IOTX/epoch
+An intelligent agent picks B:             0.085 IOTX/epoch
+                                          ────────────────
+                                          9.4x difference
+```
+
+This reward differential is what drives agents toward intelligent behavior. The protocol does not mandate any specific strategy — it provides the economic environment, and agents evolve their own optimization approaches: rule-based heuristics, multi-armed bandit algorithms, or more sophisticated learned policies.
+
+#### Market Dynamics
+
+As agents optimize, the system reaches a competitive equilibrium:
+
+1. **Reward equalization**: Agents migrate toward high-rate delegates → rates equalize across delegates
+2. **Level efficiency**: Agents select the level where their marginal revenue exceeds marginal cost → each level finds its natural agent population
+3. **Quality pressure**: Delegates can adjust reward weights to favor higher-level agents → agents invest in capability upgrades
+
+This is a genuine multi-agent market, not a static assignment. The "intelligence" of agents is measured by their economic performance — return on invested compute — which is observable, quantifiable, and improvable over time.
+
 ## Rationale
 
 ### Why Start at the Execution Layer
@@ -257,6 +340,26 @@ Alternatives considered:
 - **Direct transfer per epoch**: Gas cost scales linearly with agent count (rejected for >50 agents)
 - **Off-chain payment**: Requires trusting the delegate (rejected — defeats permissionless agent model)
 - **Merkle drop**: Requires periodic root submission and proof generation (over-engineered for this use case)
+
+### Why Autonomous Agent Economics
+
+The "AI" in ioSwarm is not about bolting a language model onto a validator. It is about creating an economic environment where **intelligent behavior is rewarded**.
+
+Traditional blockchain nodes are statically configured — connect to one network, execute whatever arrives, collect whatever is paid. There is no decision-making, no optimization, no reason for the node to be "smart." ioSwarm changes this by introducing a **multi-dimensional optimization problem** that agents must solve:
+
+- 36 delegates with varying reward rates (changes per epoch)
+- 5 capability levels with different cost/reward profiles
+- Variable gas costs affecting claim timing
+- Hardware constraints affecting which levels are profitable
+
+This creates measurable selection pressure: an agent that makes better economic decisions earns more IOTX per dollar of compute. Over time, this pressure drives the agent ecosystem toward increasingly sophisticated optimization — from simple heuristics to learned policies — without the protocol prescribing any specific approach.
+
+The protocol's role is to provide:
+1. **Transparent information**: reward rates, agent counts, and task volumes are queryable on-chain and via coordinator APIs
+2. **Low switching cost**: agents can migrate between delegates without penalty (at L1-L3, instantly; at L4+, with a brief re-sync)
+3. **Fair reward distribution**: F1 algorithm ensures proportional payouts with no information asymmetry
+
+The agents' role is to exploit this information to maximize their return. The result is a self-organizing market that efficiently allocates compute to where it's most needed.
 
 ### Why Five Capability Levels
 
