@@ -1,6 +1,6 @@
 ```
 IIP: 58
-Title: ioSwarm — Decentralized Execution Layer via AI Agent Swarm
+Title: ioSwarm — Decentralized Execution Layer via Autonomous Agent Swarm
 Author: Raullen Chai (@raullen)
 Discussions-to: TBD
 Status: Draft
@@ -11,7 +11,7 @@ Created: 2026-03-11
 
 ## Abstract
 
-ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a chain run by thousands — eventually millions — of AI agent nodes. Each delegate opens its execution layer to a swarm of autonomous agents that validate transactions, maintain chain state, and ultimately build entire blocks, earning IOTX rewards for their work. ioSwarm requires zero consensus-layer changes, deploys as an opt-in sidecar to each delegate's existing iotex-core node, and lays the foundation for a future where AI agents are the primary operators of the IoTeX network.
+ioSwarm transforms IoTeX from a chain run by 36 delegates on 36 machines into a chain run by thousands — eventually millions — of autonomous agent nodes. Each delegate opens its execution layer to a swarm of autonomous agents that validate transactions, maintain chain state, and ultimately build entire blocks, earning IOTX rewards for their work. ioSwarm requires zero consensus-layer changes, deploys as an opt-in sidecar to each delegate's existing iotex-core node, and lays the foundation for a future where autonomous agents are the primary operators of the IoTeX network.
 
 ## Motivation
 
@@ -43,7 +43,7 @@ Ethereum's Merge took years and dozens of EIPs to achieve consensus-execution se
 
 At L5 (full block building), ioSwarm's architecture *includes* ePBS as a special case — the delegate becomes the proposer, the agent becomes the builder. But the broader design encompasses L1–L4, where agents perform execution work without building blocks at all. ePBS is the endgame; consensus-execution separation is the framework.
 
-**In one sentence: ioSwarm separates the execution layer from IoTeX's consensus delegates and distributes it across an open swarm of AI agents, where anyone can participate and each delegate curates its own agent pool.**
+**In one sentence: ioSwarm separates the execution layer from IoTeX's consensus delegates and distributes it across an open swarm of autonomous agents, where anyone can participate and each delegate curates its own agent pool.**
 
 ### The Problem
 
@@ -295,7 +295,9 @@ if local_hash != diff.post_state_hash:
 Recovery (in priority order):
 1. **Catch-up**: Request missing diffs from coordinator's rolling buffer (last ~100 blocks, ~16 min)
 2. **Incremental re-snapshot**: Only changed KV pairs since agent's last known good height
-3. **Full re-snapshot**: Last resort, re-download ~1 GB
+3. **Full re-snapshot**: Last resort, re-download ~1 GB from an external endpoint (see below)
+
+**Snapshot offload**: Full snapshots (~1 GB) must **not** be served directly by the coordinator. If 100 L4 agents simultaneously detect state divergence (e.g., after a network blip), requesting snapshots from the coordinator would generate ~100 GB of burst traffic, potentially saturating the delegate node's bandwidth and disrupting consensus communication. Instead, the coordinator periodically exports snapshots to external storage (CDN, IPFS, or object store such as S3) and returns a download URL via `DownloadSnapshot`. This decouples the heaviest data transfer from the block-producing node. The coordinator only serves lightweight incremental diffs (~50–200 KB/block) over the gRPC stream.
 
 #### Key Design Advantage: deltaStateDigest
 
@@ -768,7 +770,7 @@ Shadow mode is a cost. But it is a **one-time proving cost** per agent, not a pe
 
 2. **Single coordinator**: The coordinator is a single process within the delegate. If it crashes, agents cannot receive tasks until it restarts. The delegate continues producing blocks normally via iotex-core's standard execution path.
 
-3. **State diff reliability (L4+)**: If an agent misses a state diff, all subsequent EVM execution produces wrong results. Mitigated by chained state hash verification with automatic re-snapshot on divergence. The coordinator maintains a rolling window of recent diffs (~100 blocks) for agent catch-up.
+3. **State diff reliability (L4+)**: If an agent misses a state diff, all subsequent EVM execution produces wrong results. Mitigated by chained state hash verification with automatic re-snapshot on divergence. The coordinator maintains a rolling window of recent diffs (~100 blocks) for agent catch-up. Full snapshots are served via external storage (CDN/IPFS/S3), not by the coordinator directly, to avoid bandwidth storms on the delegate node.
 
 ## References
 
