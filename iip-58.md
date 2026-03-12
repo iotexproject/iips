@@ -30,20 +30,20 @@ In most chains — including IoTeX today — both layers run on the same machine
 |-----------|------------------|-----|----------|
 | **Ethereum's Merge (2022)** | Consensus client from execution client | Two separate programs communicating via Engine API, but still on the **same operator's machine** | [EIP-3675](https://eips.ethereum.org/EIPS/eip-3675) (PoS transition), [Engine API](https://github.com/ethereum/execution-apis) (consensus↔execution interface), [EIP-4399](https://eips.ethereum.org/EIPS/eip-4399) (PREVRANDAO) |
 | **Ethereum's ePBS** | Proposer from Builder (within block production) | Specialized builders construct blocks; validators just sign. But builders are **few and centralized** (3–5 dominant firms) | [EIP-7732](https://eips.ethereum.org/EIPS/eip-7732) (ePBS), [EIP-7898](https://eips.ethereum.org/EIPS/eip-7898) (uncouple execution payload) |
-| **ioSwarm** | Consensus layer from execution layer | Execution moves to a **permissionless network** of thousands of independent agents | This IIP |
+| **ioSwarm** | Consensus layer from execution layer | Execution moves to an **open network** of thousands of independent agents | This IIP |
 
 Ethereum's Merge took years and dozens of EIPs to achieve consensus-execution separation at the *process* level — splitting one monolithic Geth client into a Beacon Chain consensus client (Prysm, Lighthouse, etc.) and an execution client (Geth, Reth, etc.) connected via the Engine API. ioSwarm takes the next step: separating them at the *network* level. The execution layer is not just a different process on the same machine, but an **open, decentralized network** of commodity agents — anyone with a $5/mo VPS can join, perform execution work, and earn rewards.
 
 | | Ethereum ePBS | IoTeX ioSwarm |
 |---|---|---|
 | **Consensus** | Validators (~900K) | Delegates (36) |
-| **Execution** | Builders (3–5 dominant, centralized) | Agent Swarm (thousands, permissionless) |
+| **Execution** | Builders (3–5 dominant, centralized) | Agent Swarm (thousands, open market) |
 | **Relay** | MEV-Boost relay | Coordinator (embedded in delegate) |
 | **Participation** | High barrier (specialized hardware, MEV expertise) | Low barrier ($5/mo VPS, anyone can join) |
 
 At L5 (full block building), ioSwarm's architecture *includes* ePBS as a special case — the delegate becomes the proposer, the agent becomes the builder. But the broader design encompasses L1–L4, where agents perform execution work without building blocks at all. ePBS is the endgame; consensus-execution separation is the framework.
 
-**In one sentence: ioSwarm separates the execution layer from IoTeX's consensus delegates and distributes it across a permissionless swarm of AI agents.**
+**In one sentence: ioSwarm separates the execution layer from IoTeX's consensus delegates and distributes it across an open swarm of AI agents, where anyone can participate and each delegate curates its own agent pool.**
 
 ### The Problem
 
@@ -69,7 +69,7 @@ This optimization pressure is what drives agents toward genuine autonomous intel
 |------|-----------|
 | **Delegate** | One of IoTeX's 36 elected block producers. Runs iotex-core, participates in consensus, signs blocks. |
 | **Coordinator** | A sidecar module embedded in the delegate's iotex-core node. Dispatches work to agents, tracks contributions, settles rewards. Does not participate in consensus. |
-| **Agent** | An independent process (typically on a $5–20/mo VPS) that connects to a coordinator, performs execution work, and earns IOTX. Agents are permissionless — anyone can run one. |
+| **Agent** | An independent process (typically on a $5–20/mo VPS) that connects to a coordinator, performs execution work, and earns IOTX. The protocol is open — anyone can run an agent — but each delegate decides which agents to admit (see [Agent Admission](#sybil-resistance-and-agent-admission)). |
 | **Agent Swarm** | The set of all agents connected to a single coordinator. Each delegate has its own swarm. |
 | **Capability Level (L1–L5)** | A classification of agent capability, from L1 (signature verification only) to L5 (full block building). Higher levels require more resources but earn higher rewards. See [Capability Levels](#capability-levels-l1l5). |
 | **Epoch** | A fixed interval (configurable, default 3 blocks / ~30s) after which the coordinator tallies agent work and settles rewards on-chain. |
@@ -538,7 +538,7 @@ The key insight: in a large, diverse agent population, the **aggregate intellige
 
 ioSwarm's Phase 1 (no agent reordering) buys time for the agent ecosystem to mature. When Phase 2 introduces controlled reordering, the competitive landscape will be shaped by thousands of agents with diverse strategies, not a handful of incumbents. The protocol's reward structure (70% primary / 20% participation / 10% standby) further ensures that even non-winning agents earn rewards for participation, preventing the pure winner-take-all dynamic that centralizes Ethereum's builder market.
 
-**This is not a solved problem.** MEV centralization is an active area of research across the industry. ioSwarm's contribution is structural: a permissionless, low-barrier agent network provides more fertile ground for decentralized MEV solutions than a high-barrier, capital-intensive builder market.
+**This is not a solved problem.** MEV centralization is an active area of research across the industry. ioSwarm's contribution is structural: an open, low-barrier agent network provides more fertile ground for decentralized MEV solutions than a high-barrier, capital-intensive builder market.
 
 ## Rationale
 
@@ -569,7 +569,7 @@ The [F1 algorithm](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-toke
 
 Alternatives considered:
 - **Direct transfer per epoch**: Gas cost scales linearly with agent count (rejected for >50 agents)
-- **Off-chain payment**: Requires trusting the delegate (rejected — defeats permissionless agent model)
+- **Off-chain payment**: Requires trusting the delegate (rejected — defeats open agent model)
 - **Merkle drop**: Requires periodic root submission and proof generation (over-engineered for this use case)
 
 ### Why Autonomous Agent Economics
@@ -707,16 +707,18 @@ ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the RewardSet
 
 ### Sybil Resistance and Agent Admission
 
-ioSwarm is **not a public permissionless protocol** — it is a set of private services operated by each delegate independently. Each delegate's coordinator controls its own agent admission:
+ioSwarm is **permissionless at the protocol level, but curated at the coordinator level**. Anyone can run an agent — the software is open-source, requires no on-chain registration, and imposes no minimum stake at the protocol layer. However, each delegate exercises **freedom of association**: it independently decides which agents to admit to its swarm.
 
-- **API key authentication**: Agents authenticate via HMAC-SHA256 API keys. The delegate generates and distributes keys to agents it trusts. An attacker cannot register without a valid key.
-- **Delegate autonomy**: Each delegate decides its own admission policy — open registration, invite-only, staking requirement, KYC, or any combination. The protocol does not mandate a single approach.
+This creates a **free market for execution services**:
+
+- **Open participation**: Any operator can launch an agent and offer execution services to any delegate. No protocol-level gatekeeping.
+- **Delegate curation**: Each delegate's coordinator controls its own admission policy — open registration, API key auth (HMAC-SHA256), invite-only, staking requirement, or any combination. The protocol does not mandate a single approach.
 - **Rate limiting**: The coordinator enforces per-agent rate limits (10 req/s, burst 20) and evicts agents that exceed them.
-- **`maxAgents` as defense**: The `maxAgents` cap (default 100) bounds the coordinator's resource exposure. Combined with API key auth, an attacker must compromise 100 keys to fill all slots.
+- **`maxAgents` as defense**: The `maxAgents` cap (default 100) bounds the coordinator's resource exposure.
 
 This is analogous to how Ethereum validators choose which MEV-Boost relays to trust, or how mining pools choose which miners to admit. The trust relationship is between the delegate and its agents, not between the protocol and agents. Each delegate bears the cost of its own swarm and has full economic incentive to prevent abuse.
 
-For delegates that want open registration (no API key), additional defenses are available:
+For delegates that want additional Sybil defenses beyond curation:
 - **Minimum stake**: Require agents to deposit a small IOTX bond (refundable on graceful exit, slashed on misbehavior)
 - **Proof of work**: Require a computational puzzle at registration to raise Sybil cost
 - **Reputation scoring**: Weight rewards by historical accuracy, naturally penalizing new/untrusted agents
