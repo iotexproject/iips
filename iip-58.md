@@ -230,7 +230,7 @@ The coordinator and agents communicate via gRPC with server-side streaming:
 | `SubmitResults` | Agent → Coordinator | L1–L4 | Agent returns validation results: valid/invalid, gas used, state changes, reject reason. |
 | `Heartbeat` | Bidirectional | All | Periodic keep-alive (10s interval). Agents missing 6 consecutive heartbeats are evicted. Coordinator sends payout notifications. |
 | `StreamStateDiffs` | Coordinator → Agent (stream) | L4+ | Incremental state changesets per block with chained state hashes. |
-| `DownloadSnapshot` | Agent → Coordinator | L4+ | Agent requests full EVM state snapshot at cold start or after state divergence. |
+| `DownloadSnapshot` | Agent → Coordinator | L4+ | Agent requests state snapshot URL. Coordinator returns a download link to externally hosted snapshot (CDN/IPFS/S3), not the data itself. |
 | `SubmitCandidateBlock` | Agent → Coordinator | L5 | Agent submits a fully built candidate block for delegate verification. |
 
 **Authentication**: HMAC-SHA256 — `api_key = "iosw_" + hex(HMAC-SHA256(masterSecret, agentID))`.
@@ -576,9 +576,9 @@ Alternatives considered:
 
 ### Why Autonomous Agent Economics
 
-The "AI" in ioSwarm is not about bolting a language model onto a validator. It is about creating an economic environment where **intelligent behavior is rewarded** — and where the complexity of that intelligence grows with the system.
+ioSwarm agents are called "autonomous" not because they run a language model, but because they operate in an economic environment where **intelligent behavior is rewarded** — and where the complexity of that intelligence grows with the system.
 
-A fair objection: the delegate selection formula (`epoch_reward × (1 - delegate_cut) / num_agents`) is basic arithmetic, not artificial intelligence. At L1–L3, this is true — an agent optimizing across 36 delegates is closer to a routing script than an AI system.
+A fair objection: the delegate selection formula (`epoch_reward × (1 - delegate_cut) / num_agents`) is basic arithmetic, not autonomy. At L1–L3, this is true — an agent optimizing across 36 delegates is closer to a routing script than an autonomous system.
 
 But this is the **starting point**, not the ceiling. Agent intelligence deepens as the system evolves:
 
