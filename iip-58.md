@@ -138,7 +138,7 @@ ioSwarm defines five capability levels that classify what an agent can do. Each 
 Key transitions:
 
 - **L1–L3 are stateless.** The coordinator provides whatever state the agent needs per-task. Agents are lightweight ($5/mo VPS, <64 MB RAM) and can serve multiple delegates simultaneously.
-- **L3 → L4 is the critical jump.** At L3, the coordinator provides per-tx state snapshots, but incomplete state limits EVM accuracy to ~14% on mainnet. At L4, the agent maintains full synchronized EVM state locally, achieving 100% accuracy.
+- **L3 → L4 is the critical jump.** At L3, the agent achieves 100% accuracy but depends entirely on the coordinator for state provisioning — every storage slot must be prefetched and streamed per-transaction. At L4, the agent maintains full synchronized EVM state locally, achieving the same 100% accuracy but with complete independence from the coordinator's state service.
 - **L4 → L5 adds block building.** The agent no longer validates individual transactions — it constructs entire candidate blocks, taking on the delegate's execution workload.
 
 The following sections detail what each component does at each level.
@@ -171,7 +171,7 @@ Agents are stateless. Coordinator provides per-tx account snapshots.
 | **Agent** | L2 checks + execute tx in embedded EVM sandbox, report gas used and state changes |
 | **Contract** | Same as L1 |
 
-Agents are stateless. Coordinator provides per-tx state, but **incomplete state limits accuracy to ~14% on mainnet** — the primary motivation for L4.
+Agents are stateless. The coordinator uses `SimulateAccessList` to prefetch all EVM storage slots needed by each transaction, achieving **100% accuracy** on mainnet (230+ transactions verified, zero misses). However, agents depend on the coordinator for every state read — L4 removes this dependency.
 
 #### L4 — Per-Tx Stateful EVM Execution
 
@@ -454,8 +454,18 @@ contract RewardSettlement {
         uint256[] calldata weights
     ) external payable;
 
+    // Atomic deposit + settle + claim in a single tx (v2)
+    function depositSettleAndClaim(
+        address[] calldata agents,
+        uint256[] calldata weights,
+        address[] calldata claimants
+    ) external payable;
+
     // Any agent can claim their accumulated rewards
     function claim() external;
+
+    // Coordinator can claim on behalf of an agent (v2)
+    function claimFor(address agent) external;
 
     // View: check pending reward amount
     function claimable(address agent) external view returns (uint256);
@@ -616,16 +626,14 @@ The agents' role is to exploit this information to maximize their return. A "dum
  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐
  │ Snapshot export  │  │ Local-state EVM │  │ Exec cache in   │  │ Block building   │
  │ StateDiff stream │  │ 100% accuracy   │  │ delegate node   │  │ engine in agent  │
- │ Pebble KV store  │  │ Shadow-mode     │  │ Skip re-exec    │  │ Primary/standby  │
+ │ BoltDB KV store  │  │ Shadow-mode     │  │ Skip re-exec    │  │ Primary/standby  │
  │ on agent         │  │ comparison      │  │ on cache hit    │  │ model            │
+ │                  │  │                 │  │                 │  │                  │
+ │  ✅ COMPLETE     │  │  ✅ COMPLETE    │  │  In design      │  │  In design       │
  └─────────────────┘  └─────────────────┘  └─────────────────┘  └──────────────────┘
-    ~2-3 weeks            ~2 weeks            ~1-2 weeks            ~3-4 weeks
-
- ────────────────────────────────────────────────────────────────────────────────►
-                              ~8-11 weeks total
 ```
 
-Each stage delivers independently — Stage 0 gives agents state access, Stage 1 proves 100% accuracy, Stage 2 reduces delegate CPU, Stage 3 is full ePBS.
+Stages 0–1 are complete and running on IoTeX mainnet (March 2026). Stage 2–3 are in active design.
 
 ### Deployment
 
@@ -637,26 +645,53 @@ ioswarm:
   grpcPort: 14689
   maxAgents: 100
   epochRewardIOTX: 0.5
-  rewardContract: "0x96F475F87911615dD710f9cB425Af8ed0e167C89"
+  rewardContract: "0x236CBF52125E68Db8fA88b893CcaFB2EE542F2d9"
   rewardSignerKey: "<coordinator-hot-wallet-private-key>"
 ```
 
 Agents connect with a single command:
 
 ```bash
+# L3 (default — stateless, coordinator provides per-tx state)
 ioswarm-agent \
   --coordinator=<delegate-ip>:14689 \
   --agent-id=my-agent \
   --api-key=iosw_<hmac-key> \
-  --level=L3 \
   --wallet=0x<reward-wallet>
+
+# L4 (stateful — agent maintains full local EVM state)
+ioswarm-agent \
+  --coordinator=<delegate-ip>:14689 \
+  --agent-id=my-agent \
+  --api-key=iosw_<hmac-key> \
+  --wallet=0x<reward-wallet> \
+  --level=L4 --snapshot=./acctcode.snap.gz --datadir=./l4state
 ```
 
 ## Test Results
 
-ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the RewardSettlement contract deployed at `0x96F475F87911615dD710f9cB425Af8ed0e167C89`.
+ioSwarm has been tested end-to-end on IoTeX mainnet across L1–L4, with the AgentRewardPool v2 contract deployed at [`0x236CBF52125E68Db8fA88b893CcaFB2EE542F2d9`](https://iotexscan.io/address/0x236CBF52125E68Db8fA88b893CcaFB2EE542F2d9).
 
-### Coverage
+### L3 Stateless Validation
+
+| Metric | Value |
+|--------|-------|
+| Shadow accuracy | **100%** (230+ mainnet transactions, zero misses) |
+| State prefetch | SimulateAccessList — all EVM storage slots prefetched per tx |
+
+### L4 Stateful Validation (Production, March 2026)
+
+| Metric | Value |
+|--------|-------|
+| Shadow accuracy (post-restart) | **100%** (32/32 transactions) |
+| Shadow accuracy (24h soak test) | **99.5%** (423/425) |
+| 0.5% gap root cause | Nonce race during state sync lag — sequence barrier fix designed |
+| Kill/restart recovery | **<200ms** from BoltDB state store |
+| Agent resource usage | 679 MiB RAM, 24.5% CPU, 931 MB disk |
+| State snapshot size | 209 MB (IOSWSNAP, gzip) via https://ts.iotex.me |
+| Cold start time | ~10s (snapshot load → ready) |
+
+### Reward Settlement (E2E on mainnet)
 
 | Category | Tests Passed | Total | Status |
 |----------|-------------|-------|--------|
@@ -666,11 +701,11 @@ ioSwarm (L1–L3) has been tested end-to-end on IoTeX mainnet with the RewardSet
 | Security & Auth | 4 | 4 | Complete |
 | Edge Cases | 10 | 10 | Complete |
 | Security Audit | 10 | 10 | Complete |
-| Stress Testing | 8 | 10 | In progress |
+| Stress Testing | 10 | 10 | Complete |
 | Contract Verification | 5 | 5 | Complete |
-| **Total** | **~78** | **~89** | **~88%** |
+| **Total** | **66** | **66** | **100%** |
 
-### Key Metrics
+### On-Chain Metrics
 
 | Metric | Value |
 |--------|-------|
