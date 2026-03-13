@@ -32,14 +32,14 @@ In most chains — including IoTeX today — both layers run on the same machine
 | **Ethereum's ePBS** | Proposer from Builder (within block production) | Specialized builders construct blocks; validators just sign. But builders are **few and centralized** (3–5 dominant firms) | [EIP-7732](https://eips.ethereum.org/EIPS/eip-7732) (ePBS), [EIP-7898](https://eips.ethereum.org/EIPS/eip-7898) (uncouple execution payload) |
 | **ioSwarm** | Consensus layer from execution layer | Execution moves to an **open network** of thousands of independent agents | This IIP |
 
-Ethereum's Merge took years and dozens of EIPs to achieve consensus-execution separation at the *process* level — splitting one monolithic Geth client into a Beacon Chain consensus client (Prysm, Lighthouse, etc.) and an execution client (Geth, Reth, etc.) connected via the Engine API. ioSwarm takes the next step: separating them at the *network* level. The execution layer is not just a different process on the same machine, but an **open, decentralized network** of commodity agents — anyone with a $5/mo VPS can join, perform execution work, and earn rewards.
+Ethereum's Merge took years and dozens of EIPs to achieve consensus-execution separation at the *process* level — splitting one monolithic Geth client into a Beacon Chain consensus client (Prysm, Lighthouse, etc.) and an execution client (Geth, Reth, etc.) connected via the Engine API. ioSwarm takes the next step: separating them at the *network* level. The execution layer is not just a different process on the same machine, but an **open, decentralized network** of commodity agents — anyone with a commodity machine can join, perform execution work, and earn rewards.
 
 | | Ethereum ePBS | IoTeX ioSwarm |
 |---|---|---|
 | **Consensus** | Validators (~900K) | Delegates (36) |
 | **Execution** | Builders (3–5 dominant, centralized) | Agent Swarm (thousands, open market) |
 | **Relay** | MEV-Boost relay | Coordinator (embedded in delegate) |
-| **Participation** | High barrier (specialized hardware, MEV expertise) | Low barrier ($5/mo VPS, anyone can join) |
+| **Participation** | High barrier (specialized hardware, MEV expertise) | Low barrier (commodity hardware, anyone can join) |
 
 At L5 (full block building), ioSwarm's architecture *includes* ePBS as a special case — the delegate becomes the proposer, the agent becomes the builder. But the broader design encompasses L1–L4, where agents perform execution work without building blocks at all. ePBS is the endgame; consensus-execution separation is the framework.
 
@@ -69,7 +69,7 @@ This optimization pressure is what drives agents toward genuine autonomous intel
 |------|-----------|
 | **Delegate** | One of IoTeX's 36 elected block producers. Runs iotex-core, participates in consensus, signs blocks. |
 | **Coordinator** | A sidecar module embedded in the delegate's iotex-core node. Dispatches work to agents, tracks contributions, settles rewards. Does not participate in consensus. |
-| **Agent** | An independent process (typically on a $5–20/mo VPS) that connects to a coordinator, performs execution work, and earns IOTX. The protocol is open — anyone can run an agent — but each delegate decides which agents to admit (see [Agent Admission](#sybil-resistance-and-agent-admission)). |
+| **Agent** | An independent process (typically on a low-cost VPS or home server) that connects to a coordinator, performs execution work, and earns IOTX. The protocol is open — anyone can run an agent — but each delegate decides which agents to admit (see [Agent Admission](#sybil-resistance-and-agent-admission)). |
 | **Agent Swarm** | The set of all agents connected to a single coordinator. Each delegate has its own swarm. |
 | **Capability Level (L1–L5)** | A classification of agent capability, from L1 (signature verification only) to L5 (full block building). Higher levels require more resources but earn higher rewards. See [Capability Levels](#capability-levels-l1l5). |
 | **Epoch** | A fixed interval (configurable, default 3 blocks / ~30s) after which the coordinator tallies agent work and settles rewards on-chain. |
@@ -137,7 +137,7 @@ ioSwarm defines five capability levels that classify what an agent can do. Each 
 
 Key transitions:
 
-- **L1–L3 are stateless.** The coordinator provides whatever state the agent needs per-task. Agents are lightweight ($5/mo VPS, <64 MB RAM) and can serve multiple delegates simultaneously.
+- **L1–L3 are stateless.** The coordinator provides whatever state the agent needs per-task. Agents are lightweight (<64 MB RAM) and can serve multiple delegates simultaneously.
 - **L3 → L4 is the critical jump.** At L3, the agent achieves 100% accuracy but depends entirely on the coordinator for state provisioning — every storage slot must be prefetched and streamed per-transaction. At L4, the agent maintains full synchronized EVM state locally, achieving the same 100% accuracy but with complete independence from the coordinator's state service.
 - **L4 → L5 adds block building.** The agent no longer validates individual transactions — it constructs entire candidate blocks, taking on the delegate's execution workload.
 
@@ -261,7 +261,7 @@ snapshot = {
 }
 ```
 
-Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Downloadable in ~1 minute on a $5/mo VPS.
+Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Downloadable in ~1 minute on a commodity VPS.
 
 **2. Incremental Sync — State Diffs per Block**
 
@@ -370,9 +370,9 @@ Each level requires different resources and earns different reward weight:
 |-------|-------------|---------|---------------|------------------|
 | L1 | ~0 | 0 | 1x | Any device |
 | L2 | ~0 | 0 | 1x | Any device |
-| L3 | Low CPU | 0 | 2–3x | $5/mo VPS |
-| L4 | Medium CPU | ~1 GB | 5–10x | $10/mo VPS |
-| L5 | High CPU | ~1 GB | 10–20x | $10–20/mo VPS |
+| L3 | Low CPU | 0 | 2–3x | 1 vCPU, 1 GB RAM |
+| L4 | Medium CPU | ~1 GB | 5–10x | 1 vCPU, 2 GB RAM |
+| L5 | High CPU | ~1 GB | 10–20x | 2 vCPU, 4 GB RAM |
 
 An agent evaluates: "At my hardware cost, which level maximizes `(reward_weight × effective_rate) - operating_cost`?"
 
@@ -510,7 +510,7 @@ At the end state, a delegate becomes a **thin proposer** — similar to Lido's m
 
 Agents evolve from stateless tx validators into full block builders:
 
-- **L1–L3 (stateless)**: Commodity $5/mo VPS, no local state, pure computation. Many agents can serve many delegates simultaneously.
+- **L1–L3 (stateless)**: Commodity hardware, no local state, pure computation. Many agents can serve many delegates simultaneously.
 - **L4 (stateful)**: Agents maintain synchronized state via state diffs. Can independently verify execution correctness.
 - **L5 (block builder)**: Agents construct complete candidate blocks — ordering transactions, computing state transitions, and producing `deltaStateDigest`. The best block wins.
 
@@ -784,7 +784,7 @@ The cost of shadow mode is low and deliberate:
 
 | | Shadow Mode (L1–L4a) | Active Mode (L4b–L5) |
 |---|---|---|
-| **Agent cost** | $5–10/mo VPS | Same |
+| **Agent cost** | Minimal (commodity VPS) | Same |
 | **Delegate cost** | Epoch rewards (~0.5 IOTX/30s) | Same, but delegate CPU drops |
 | **What delegate gains** | Accuracy data: does this agent match my execution 100%? | Actual CPU offload, block building |
 | **What agent gains** | Reputation + rewards | Higher rewards |
