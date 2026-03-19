@@ -2,22 +2,25 @@
 IIP: 56
 Title: Deprecation of CIOTX Across All Networks
 Author: Qevan Guo
-Status: Draft
+Status: Approved
 Type: Standards Track
 Category: Token / Governance
 Created: 2026-02-26
+Updated: 2026-03-16
 Requires: IIP-48
 ```
 
 ## Abstract
 
-On February 20, 2026, the ioTube cross-chain bridge was exploited, resulting in unauthorized minting of CIOTX tokens on Ethereum. This proposal deprecates CIOTX across all networks — Ethereum, Base, Solana, BSC, Polygon, and IoTeX — and establishes differentiated wind-down procedures based on whether each network was affected by the exploit.
+On February 21, 2026 (UTC), the ioTube cross-chain bridge was exploited, resulting in unauthorized minting of CIOTX tokens on Ethereum. This proposal deprecates CIOTX across all networks — Ethereum, Base, Solana, BSC, Polygon, and IoTeX — and establishes differentiated wind-down procedures based on whether each network was affected by the exploit.
 
-For Ethereum, Base, and Solana, where the attacker minted illegitimate CIOTX (Base and Solana CIOTX are bridged from Ethereum and equally affected), the bridge is permanently shut down. Attacker-minted tokens are disregarded. Legitimate holders can submit claims through a dedicated claims portal to receive equivalent IOTX on the IoTeX Network.
+For Ethereum, Base, and Solana, where the attacker minted illegitimate CIOTX (Base and Solana CIOTX are bridged from Ethereum and equally affected), the bridge is permanently shut down. Attacker-minted tokens are disregarded. Legitimate holders can submit claims through the [claims portal](https://iotube-claims.iotex.io/) to receive equivalent IOTX on the IoTeX Network.
 
 For BSC and Polygon, which were not affected by unauthorized minting, the bridges will be unpaused in the future so users can self-serve bridge their CIOTX back to IOTX on the IoTeX Network. CIOTX on these networks will be deprecated over time as users complete their migrations.
 
 All CEX, DEX, and DeFi partners will be contacted to deprecate CIOTX listings and integrations across all networks.
+
+**Important:** The IoTeX Layer 1 blockchain, its consensus mechanism, and the native IOTX token were not affected by this exploit. The vulnerability was limited to the ioTube bridge infrastructure. The IoTeX chain remains fully secure.
 
 ---
 
@@ -25,7 +28,7 @@ All CEX, DEX, and DeFi partners will be contacted to deprecate CIOTX listings an
 
 **IIP-48** formalized CIOTX as the canonical cross-chain representation of IOTX, deployed across Ethereum, BSC, Polygon, and other chains via the ioTube bridge.
 
-On February 20, 2026, the ioTube bridge was exploited, and unauthorized CIOTX tokens were minted on Ethereum. As a result:
+On February 21, 2026 (UTC), the ioTube bridge was exploited, and unauthorized CIOTX tokens were minted on Ethereum. As a result:
 
 - **Tainted supply on Ethereum, Base, and Solana**: The attacker-minted CIOTX is indistinguishable from legitimately bridged CIOTX on-chain. CIOTX on Base and Solana is bridged from Ethereum (via Superbridge and Wormhole respectively), so the tainted supply propagates to these chains as well. The attacker may have already sold, transferred, or distributed these tokens, contaminating the circulating supply.
 
@@ -47,11 +50,13 @@ BSC, Polygon, and IoTeX were not affected by unauthorized minting. The bridges o
 
 - **Contract Status**: The CIOTX token contracts on Ethereum ([`0x9F90B457Dea25eF802E38D470ddA7343691D8FE1`](https://etherscan.io/token/0x9F90B457Dea25eF802E38D470ddA7343691D8FE1)), Base ([`0x819233aa703a19e434e6dd965493b6081a3fc3aa`](https://basescan.org/token/0x819233aa703a19e434e6dd965493b6081a3fc3aa)), and Solana ([`QUUzqeiXHxjs9Yxm33tvugvUsKr5T8vjeyV4XhVsAfZ`](https://solscan.io/token/QUUzqeiXHxjs9Yxm33tvugvUsKr5T8vjeyV4XhVsAfZ)) are no longer recognized as valid representations of IOTX by the IoTeX Foundation or the ioTube bridge.
 
+- **On-Chain Remediation (Completed)**: The IoTeX chain has been upgraded (v2.3.4) to permanently freeze ~45M IOTX in 29 identified attacker wallets on the IoTeX Network. The CIOTX token contract on Ethereum has been frozen via contract upgrade to prevent further transfers. These measures ensure that no additional attacker-controlled tokens can enter circulation.
+
 ### 2. Claims Portal for Legitimate Ethereum, Base, and Solana Holders
 
-Legitimate users who held CIOTX on Ethereum, Base, or Solana **before the exploit** are eligible for reimbursement through a dedicated claims portal:
+Legitimate users who held CIOTX on Ethereum, Base, or Solana **before the exploit** are eligible for reimbursement through the claims portal:
 
-- **Claims Portal**: The IoTeX Foundation will launch a claims portal where affected users can submit and track their claims.
+- **Claims Portal**: The claims portal is live at [https://iotube-claims.iotex.io/](https://iotube-claims.iotex.io/).
 
 - **Claim Submission**: Users must:
     - Send their CIOTX to the designated IoTeX Foundation wallet on Ethereum.
@@ -63,6 +68,8 @@ Legitimate users who held CIOTX on Ethereum, Base, or Solana **before the exploi
     - Cross-referencing with ioTube bridge records of legitimate cross-chain transfers
 
 - **Distribution**: Upon successful verification, equivalent IOTX will be sent to the claimant's wallet on the IoTeX Network. Distributions will be processed in batches.
+
+- **Compensation Commitment**: The IoTeX Foundation has committed to 100% compensation of all legitimate CIOTX holders from its treasury funds, ensuring no user suffers a loss from this incident.
 
 ### 3. Gradual Deprecation: BSC, Polygon, and IoTeX
 
@@ -94,7 +101,7 @@ This proposal is a **breaking change** for all CIOTX holders across all networks
 
 - **BSC, Polygon, and IoTeX**: CIOTX remains bridgeable during the migration window after bridges are unpaused. After the deprecation deadline, CIOTX on these chains will no longer be convertible to IOTX.
 
-This proposal fully supersedes IIP-48's cross-chain token unification strategy for CIOTX. A future IIP will define the replacement cross-chain approach.
+This proposal fully supersedes IIP-48's cross-chain token unification strategy for CIOTX. The replacement cross-chain bridging approach will be defined in IIP-57, which implements a ZK-based (zero-knowledge proof) architecture for trustless cross-chain verification.
 
 ---
 
