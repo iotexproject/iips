@@ -849,38 +849,72 @@ This section describes three economic phases for the agent network, each with a 
 
 **Scale**: ~36 delegates × N agents. Total reward pool bounded by delegates' willingness to pay.
 
-### Phase 2: MEV and Block Building (Medium-Term)
+### Phase 2: On-Chain Revenue (Medium-Term)
 
-**Revenue**: Priority fees and MEV from block construction.
+**Revenue**: Agents earn directly from on-chain economic activity — block building, DeFi automation, liquidations, oracle updates, and MEV.
 
-**Who pays**: Users (via priority fees) and the market (via arbitrage/MEV opportunities).
+**Who pays**: Users (via fees), DeFi protocols (via keeper rewards), and the market (via arbitrage opportunities).
 
-**How it works**: At L5, agents become block builders — equivalent to Ethereum's PBS builders or Solana's BAM nodes. The delegate becomes a thin proposer: it owns the block slot, but the agent constructs the block content. The agent captures value through:
+**The thesis**: Agents graduate from subsidized validators to **on-chain economic actors** that capture value from the chain's own activity. This encompasses three revenue streams:
+
+#### 2a. Block Building (ePBS)
+
+At L5, agents become block builders — equivalent to Ethereum's PBS builders or Solana's BAM nodes. The delegate becomes a thin proposer: it owns the block slot, but the agent constructs the block content.
 
 - **Priority fees**: Users pay higher fees for faster inclusion. The agent-builder keeps a share.
-- **MEV**: As IoTeX DeFi activity grows, arbitrage, liquidation, and backrunning opportunities emerge. Agents compete on block quality — the best block (highest fees + cleanest MEV) wins.
-- **Builder tips**: Following Ethereum's model, agents can offer the delegate a "bid" for the right to build the block, competing on price.
-
-**Comparison to existing systems**:
+- **MEV**: As DeFi activity grows, arbitrage, liquidation, and backrunning opportunities emerge. Agents compete on block quality.
+- **Builder tips**: Agents bid for the right to build the block, competing on price (Ethereum MEV-Boost model).
 
 | | Ethereum PBS | Solana BAM | ioSwarm L5 |
 |---|---|---|---|
 | Builder hardware | Datacenter (MEV infra) | TEE nodes (AMD SEV-SNP) | Commodity VPS ($5-10/mo) |
 | Builder count | 3-5 dominant | 50-100 BAM nodes | Thousands of agents |
 | Entry barrier | Very high (capital + infra) | Medium (TEE hardware) | Very low (open registration) |
-| MEV today | ~$500M/year | Growing | Minimal (DeFi nascent) |
 
-**Limitation**: IoTeX's current on-chain activity generates minimal MEV. This phase depends on DeFi ecosystem growth. MEV also tends to centralize (Ethereum's lesson) — mitigation via the 70/20/10 reward split (primary/participation/standby) and delegate-controlled inclusion lists.
+#### 2b. DeFi Automation (Keeper Work)
 
-**Scale**: Proportional to on-chain economic activity. Grows with DeFi TVL and transaction volume.
+Agents act as **keepers** — autonomous bots that execute time-sensitive on-chain operations for DeFi protocols. This is the [Keep3r Network](https://docs.keep3r.network/) model (Andre Cronje, 2020) applied to IoTeX:
 
-### Phase 3: Autonomous Service Marketplace (Long-Term)
+| Keeper Task | What the Agent Does | Who Pays |
+|-------------|--------------------|---------|
+| Vault harvesting | Call `harvest()` on yield vaults when profitable | Protocol (gas + premium) |
+| Liquidations | Monitor collateral ratios, trigger liquidations when underwater | Liquidation bonus (protocol-defined) |
+| Oracle updates | Push price feed data on-chain at regular intervals | Oracle protocol (per-update fee) |
+| Rebalancing | Adjust LP positions, vault allocations when drift exceeds threshold | Protocol (gas + premium) |
+| Limit orders | Execute conditional swaps when price conditions are met | User (execution fee) |
+| Governance | Execute queued proposals after timelock expires | DAO (gas reimbursement) |
 
-**Revenue**: Fees for services provided to other agents, applications, and end users.
+Key insight from Keep3r: **for low-risk keeper tasks, sybil resistance barely matters** — if the job is done correctly, nobody cares about the keeper's identity. Trust requirements scale with task value: simple `harvest()` calls need zero bond; large liquidations require reputation + bond + minimum keeper age.
+
+ioSwarm agents are natural keepers because they already maintain L4 state and monitor every pending transaction. Adding keeper logic is incremental — the agent already has the infrastructure.
+
+#### 2c. Cross-Chain Services
+
+Agents with ZK capability can earn fees from cross-chain operations:
+
+- **Bridge relay**: Generate ZK proofs for trustless asset bridging (connects to [IIP-57](https://github.com/iotexproject/iips/pull/63))
+- **Light client proofs**: Prove IoTeX state to other chains (Ethereum, Solana) for verification
+- **Cross-chain execution**: Accept a task on chain A, execute on IoTeX, settle proof on chain A
+
+#### Phase 2 Summary
+
+| Revenue Stream | Maturity | Dependency |
+|----------------|----------|------------|
+| Block building (ePBS) | Requires L5 implementation | DeFi activity for MEV |
+| Keeper work | Ready today (agents have L4 state) | DeFi protocols on IoTeX |
+| Cross-chain proofs | Requires IIP-57 pipeline | Bridge demand |
+
+**Limitation**: All three streams depend on IoTeX's on-chain economic activity. Minimal DeFi today = minimal revenue. But unlike Phase 1, revenue here is **market-driven, not subsidy-driven** — it scales naturally with ecosystem growth.
+
+**Scale**: Proportional to on-chain economic activity. Grows with DeFi TVL, transaction volume, and cross-chain bridge demand.
+
+### Phase 3: Off-Chain Service Marketplace (Long-Term)
+
+**Revenue**: Fees for off-chain services provided to other agents, applications, and end users.
 
 **Who pays**: Anyone who needs a service — protocols, DApps, humans, other agents.
 
-**The thesis**: Agents transition from blockchain-specific work (validation, block building) to general-purpose autonomous workers that settle on-chain. The IoTeX chain serves as the **settlement layer, identity layer, and reputation layer** for an open market of AI agent services.
+**The thesis**: Agents expand beyond blockchain-specific work (validation, block building, keeper tasks) into general-purpose autonomous workers performing off-chain tasks — settling payments and reputation on-chain. The IoTeX chain serves as the **settlement layer, identity layer, and reputation layer** for an open market of AI agent services.
 
 #### Why Blockchain is Required (Not Optional)
 
@@ -972,13 +1006,13 @@ This is an **autonomous economy** that requires crypto rails by construction. No
 
 ### Three-Phase Summary
 
-| Phase | Revenue | Who Pays | Analogy | Scale Driver |
-|-------|---------|----------|---------|-------------|
-| **1. Subsidy** | Delegate epoch rewards | Delegate operator | Startup burn rate | Delegate count (36) |
-| **2. MEV + Block Building** | Priority fees, MEV | Users, market | Ethereum Builder / Solana BAM | On-chain DeFi activity |
-| **3. Service Marketplace** | Task fees, subscriptions | Protocols, DApps, humans, agents | Keep3r + Fiverr low-end + DePIN data | AI capability × agent-to-agent commerce |
+| Phase | Revenue | Who Pays | Where | Analogy | Scale Driver |
+|-------|---------|----------|-------|---------|-------------|
+| **1. Subsidy** | Delegate epoch rewards | Delegate operator | — | Startup burn rate | Delegate count (36) |
+| **2. On-Chain** | Priority fees, MEV, keeper rewards, bridge fees | Users, DeFi protocols, market | On-chain | ETH Builder + Keep3r + ZK Bridge | On-chain economic activity |
+| **3. Off-Chain** | Task fees, subscriptions | Protocols, DApps, humans, agents | Off-chain (settle on-chain) | Fiverr low-end + DePIN data | AI capability × agent-to-agent commerce |
 
-Phase 1 is live today. Phase 2 requires DeFi ecosystem growth and L5 implementation. Phase 3 requires the service marketplace protocol (task escrow, reputation, dispute resolution) — a separate IIP to be proposed.
+Phase 1 is live today. Phase 2 requires DeFi ecosystem growth, L5 implementation, and keeper protocol integration. Phase 3 requires the off-chain service marketplace protocol (task escrow, reputation, dispute resolution) — a separate IIP to be proposed.
 
 ## References
 
