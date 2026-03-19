@@ -12,7 +12,7 @@ Requires: IIP-48
 
 ## Abstract
 
-On February 21, 2026, the ioTube cross-chain bridge was exploited, resulting in unauthorized minting of CIOTX tokens on Ethereum. This proposal deprecates CIOTX across all networks — Ethereum, Base, Solana, BSC, Polygon, and IoTeX — and establishes differentiated wind-down procedures based on whether each network was affected by the exploit.
+On February 21, 2026 (UTC), the ioTube cross-chain bridge was exploited, resulting in unauthorized minting of CIOTX tokens on Ethereum. This proposal deprecates CIOTX across all networks — Ethereum, Base, Solana, BSC, Polygon, and IoTeX — and establishes differentiated wind-down procedures based on whether each network was affected by the exploit.
 
 For Ethereum, Base, and Solana, where the attacker minted illegitimate CIOTX (Base and Solana CIOTX are bridged from Ethereum and equally affected), the bridge is permanently shut down. Attacker-minted tokens are disregarded. Legitimate holders can submit claims through the [claims portal](https://iotube-claims.iotex.io/) to receive equivalent IOTX on the IoTeX Network.
 
@@ -28,7 +28,7 @@ All CEX, DEX, and DeFi partners will be contacted to deprecate CIOTX listings an
 
 **IIP-48** formalized CIOTX as the canonical cross-chain representation of IOTX, deployed across Ethereum, BSC, Polygon, and other chains via the ioTube bridge.
 
-On February 21, 2026, the ioTube bridge was exploited, and unauthorized CIOTX tokens were minted on Ethereum. As a result:
+On February 21, 2026 (UTC), the ioTube bridge was exploited, and unauthorized CIOTX tokens were minted on Ethereum. As a result:
 
 - **Tainted supply on Ethereum, Base, and Solana**: The attacker-minted CIOTX is indistinguishable from legitimately bridged CIOTX on-chain. CIOTX on Base and Solana is bridged from Ethereum (via Superbridge and Wormhole respectively), so the tainted supply propagates to these chains as well. The attacker may have already sold, transferred, or distributed these tokens, contaminating the circulating supply.
 
