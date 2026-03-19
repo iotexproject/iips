@@ -263,6 +263,18 @@ snapshot = {
 
 Total snapshot size: **~300 MB – 1.2 GB** (vs Ethereum's ~245 GiB). Downloadable in ~1 minute on a commodity VPS.
 
+In practice, L4 agents only need the **Account** and **Code** namespaces (~200 MB compressed). The **Contract** namespace (80M+ entries, ~1 GB) is only needed for full stateful EVM execution with contract storage — and can be omitted for most validation scenarios. The `snapshotexporter` tool supports a `--namespaces` flag for selective export:
+
+```bash
+# Export Account+Code only (~1 min, ~200 MB)
+snapshotexporter --source /path/to/trie.db --output acctcode.snap.gz --namespaces Account,Code
+
+# Export all 3 namespaces (~1 hour, ~1 GB)
+snapshotexporter --source /path/to/trie.db --output full.snap.gz --namespaces Account,Code,Contract
+```
+
+**Important**: The source `trie.db` must be copied while iotex-core is stopped — BoltDB uses exclusive file locking and copying a live database produces a corrupted file. The production cron pipeline stops the delegate container, copies `trie.db`, restarts the container, then runs `snapshotexporter` on the copy. Daily snapshots are served via https://ts.iotex.me.
+
 **2. Incremental Sync — State Diffs per Block**
 
 Every block, the coordinator broadcasts the state changeset to all connected L4+ agents:
@@ -683,13 +695,15 @@ ioSwarm has been tested end-to-end on IoTeX mainnet across L1–L4, with the Age
 
 | Metric | Value |
 |--------|-------|
-| Shadow accuracy (post-restart) | **100%** (32/32 transactions) |
+| Shadow accuracy (multi-day production) | **~99%** (8 agents, continuous mainnet operation) |
 | Shadow accuracy (24h soak test) | **99.5%** (423/425) |
-| 0.5% gap root cause | Nonce race during state sync lag — sequence barrier fix designed |
+| Mismatch root cause | Nonce race during state sync lag — mostly from a single agent (agent-4b830f99); sequence barrier fix designed |
 | Kill/restart recovery | **<200ms** from BoltDB state store |
 | Agent resource usage | 679 MiB RAM, 24.5% CPU, 931 MB disk |
-| State snapshot size | 209 MB (IOSWSNAP, gzip) via https://ts.iotex.me |
+| Coordinator memory (post-fix) | **~2.1 GiB** (down from 11.65 GiB before DiffStore pruning fix) |
+| State snapshot size | ~200 MB (Account+Code only, gzip) via https://ts.iotex.me |
 | Cold start time | ~10s (snapshot load → ready) |
+| Docker image | `raullen/iotex-core:ioswarm-v14` (coordinator), `raullen/ioswarm-agent:latest` (agent) |
 
 ### Reward Settlement (E2E on mainnet)
 
@@ -806,6 +820,16 @@ Shadow mode is a cost. But it is a **one-time proving cost** per agent, not a pe
 2. **Single coordinator**: The coordinator is a single process within the delegate. If it crashes, agents cannot receive tasks until it restarts. The delegate continues producing blocks normally via iotex-core's standard execution path.
 
 3. **State diff reliability (L4+)**: If an agent misses a state diff, all subsequent EVM execution produces wrong results. Mitigated by chained state hash verification with automatic re-snapshot on divergence. The coordinator maintains a rolling window of recent diffs (~100 blocks) for agent catch-up. Full snapshots are served via external storage (CDN/IPFS/S3), not by the coordinator directly, to avoid bandwidth storms on the delegate node.
+
+### Production Bugs Fixed (v14, PR #4808)
+
+Three bugs were discovered and fixed during mainnet production (March 2026):
+
+1. **Genesis context panic** (`adapter.go`): The coordinator used `context.Background()` instead of the genesis-initialized chain context when querying account state. This caused 689 "Miss genesis context" panics in production. Fixed by passing the correct chain context.
+
+2. **DiffStore unbounded growth**: The persistent DiffStore (BoltDB) for L4 agent catch-up never pruned old entries, growing indefinitely and contributing to OOM. Fixed by adding a configurable `DiffRetainHeight` (default 10,000 blocks ≈ 27 hours) with pruning every 1,000 blocks. Setting `DiffRetainHeight: 0` preserves the original keep-all behavior.
+
+3. **OOM during block sync**: The coordinator polled the actpool and dispatched tasks to agents even while the delegate was catching up on blocks (e.g., after restart). Combined with DiffStore growth, this caused the delegate process to exceed 14.9 GiB RSS and trigger the OOM killer (64 container restarts observed). Fixed by skipping ioSwarm polling when the latest block timestamp is >30s behind wall clock.
 
 ## References
 
