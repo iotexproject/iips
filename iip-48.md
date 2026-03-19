@@ -1,12 +1,15 @@
 ```
 - Title: "IIP-48: CIOTX – A Unified Cross-Chain Token Standard for the IoTeX Network"
 - Author: Qevan Guo, Chen Chen, Seedlet
-- Status: Draft
+- Status: Superseded
+- Superseded-by: IIP-56
 - Type: Standards Track
 - Category: Token / Governance
 - Created: 2025-02-12
 - Updated: 2025-06-05
 ```
+
+> **Note (2026-03-16):** This proposal has been **superseded by [IIP-56](iip-56.md)**. Following the ioTube bridge exploit on February 21, 2026 (UTC), CIOTX is being deprecated across all networks. The cross-chain bridging approach will be replaced by [IIP-57](iip-57.md), which implements a ZK-based trustless bridge architecture. The content below is retained for historical reference only.
 
 ---
 
