@@ -831,6 +831,155 @@ Three bugs were discovered and fixed during mainnet production (March 2026):
 
 3. **OOM during block sync**: The coordinator polled the actpool and dispatched tasks to agents even while the delegate was catching up on blocks (e.g., after restart). Combined with DiffStore growth, this caused the delegate process to exceed 14.9 GiB RSS and trigger the OOM killer (64 container restarts observed). Fixed by skipping ioSwarm polling when the latest block timestamp is >30s behind wall clock.
 
+## Future Work: Agent Economic Phases
+
+ioSwarm agents will not evolve into delegates. They lack stake (cannot assume block-signing responsibility) and run on constrained hardware (cannot store and sync full chain state). Their endgame is not "weak delegate" but **autonomous service provider** — analogous to Ethereum's stateless nodes, but economically active.
+
+This section describes three economic phases for the agent network, each with a different revenue source, and the role of the IoTeX chain as the settlement and identity layer for an autonomous agent economy.
+
+### Phase 1: Delegate Subsidy (Current)
+
+**Revenue**: Delegate pays agents from its own staking rewards (`epochRewardIOTX`).
+
+**Who pays**: The delegate operator, voluntarily.
+
+**Economic rationale**: The delegate invests in building a verified agent workforce. Shadow mode proves agent accuracy; once proven, agents graduate to trusted execution (L4b) and block building (L5), delivering real CPU offload. The subsidy is a one-time proving cost per agent, not a permanent overhead.
+
+**Limitation**: This phase is not self-sustaining at scale. At L1–L4a, agents perform redundant computation — the delegate re-executes everything. The delegate pays for data (accuracy metrics), not for value received. Rational delegates will keep budgets small until agents deliver measurable savings.
+
+**Scale**: ~36 delegates × N agents. Total reward pool bounded by delegates' willingness to pay.
+
+### Phase 2: MEV and Block Building (Medium-Term)
+
+**Revenue**: Priority fees and MEV from block construction.
+
+**Who pays**: Users (via priority fees) and the market (via arbitrage/MEV opportunities).
+
+**How it works**: At L5, agents become block builders — equivalent to Ethereum's PBS builders or Solana's BAM nodes. The delegate becomes a thin proposer: it owns the block slot, but the agent constructs the block content. The agent captures value through:
+
+- **Priority fees**: Users pay higher fees for faster inclusion. The agent-builder keeps a share.
+- **MEV**: As IoTeX DeFi activity grows, arbitrage, liquidation, and backrunning opportunities emerge. Agents compete on block quality — the best block (highest fees + cleanest MEV) wins.
+- **Builder tips**: Following Ethereum's model, agents can offer the delegate a "bid" for the right to build the block, competing on price.
+
+**Comparison to existing systems**:
+
+| | Ethereum PBS | Solana BAM | ioSwarm L5 |
+|---|---|---|---|
+| Builder hardware | Datacenter (MEV infra) | TEE nodes (AMD SEV-SNP) | Commodity VPS ($5-10/mo) |
+| Builder count | 3-5 dominant | 50-100 BAM nodes | Thousands of agents |
+| Entry barrier | Very high (capital + infra) | Medium (TEE hardware) | Very low (open registration) |
+| MEV today | ~$500M/year | Growing | Minimal (DeFi nascent) |
+
+**Limitation**: IoTeX's current on-chain activity generates minimal MEV. This phase depends on DeFi ecosystem growth. MEV also tends to centralize (Ethereum's lesson) — mitigation via the 70/20/10 reward split (primary/participation/standby) and delegate-controlled inclusion lists.
+
+**Scale**: Proportional to on-chain economic activity. Grows with DeFi TVL and transaction volume.
+
+### Phase 3: Autonomous Service Marketplace (Long-Term)
+
+**Revenue**: Fees for services provided to other agents, applications, and end users.
+
+**Who pays**: Anyone who needs a service — protocols, DApps, humans, other agents.
+
+**The thesis**: Agents transition from blockchain-specific work (validation, block building) to general-purpose autonomous workers that settle on-chain. The IoTeX chain serves as the **settlement layer, identity layer, and reputation layer** for an open market of AI agent services.
+
+#### Why Blockchain is Required (Not Optional)
+
+An autonomous AI agent cannot open a bank account, register a Stripe merchant account, or sign a platform's Terms of Service. **Crypto is the only payment rail that works for autonomous agents.** A private key is all an agent needs to receive payment, hold funds, and transact. This is not "blockchain is better than Stripe" — it is "agents have no alternative."
+
+Beyond payments, the chain provides:
+
+| Layer | What the Chain Does | Why It Can't Be Centralized |
+|-------|--------------------|-----------------------------|
+| **Settlement** | Escrow: client deposits → agent completes → contract releases | Trustless — no platform can freeze agent funds or withhold payment |
+| **Identity** | ioID for agents: registration time, task history, accuracy, specializations | Portable — not locked into one platform (unlike Fiverr reviews) |
+| **Reputation** | On-chain track record: completion count, dispute rate, client ratings | Immutable — agents build career capital that compounds across clients |
+| **Micropayments** | $0.001 agent-to-agent transactions (IoTeX gas ≈ 0) | Infeasible on Stripe/PayPal (minimum fees > task value) |
+
+#### What Agents Do (Off-Chain)
+
+Task execution happens entirely off-chain. The chain sees only the economic settlement:
+
+```
+On-chain (IoTeX)                        Off-chain (Agent)
+┌──────────────────────────┐           ┌──────────────────────────┐
+│ Task escrow (lock IOTX)  │           │ LLM inference            │
+│ Agent identity (ioID)    │           │ Data scraping/analysis   │
+│ Reputation updates       │           │ Image/audio generation   │
+│ Payment release          │           │ Physical sensor data     │
+│ Dispute arbitration      │           │ ZK proof generation      │
+│ Agent-to-agent invoicing │           │ Result delivery (IPFS)   │
+└──────────────────────────┘           └──────────────────────────┘
+```
+
+#### Service Categories
+
+**Digital services** (comparable to low-end Fiverr tasks that human freelancers increasingly reject):
+
+| Category | Examples | Agent Cost | Market Price |
+|----------|----------|-----------|--------------|
+| Text | Blog posts, translations, product descriptions, SEO copy | $0.01-0.10 | $5-50 |
+| Data | Web scraping, data cleaning, market research, analysis | $0.01-0.05 | $10-100 |
+| Image | AI art, logo concepts, social media graphics, photo editing | $0.02-0.04 | $5-50 |
+| Audio | Transcription, subtitles, text-to-speech | $0.006 | $5-25 |
+| Code | Script writing, simple websites, API integration, chatbots | $0.05-0.50 | $25-200 |
+| Monitoring | Uptime checks, price tracking, SEO rank tracking, competitor alerts | $0.001/day | $5-20/mo |
+
+**Physical-world data services** (IoTeX's unique differentiator via DePIN + ioID):
+
+| Service | Description | Data Source |
+|---------|-------------|-------------|
+| Environmental monitoring | Air quality reports, weather alerts, noise levels | Sensor.Community, OpenAQ |
+| Traffic analysis | Congestion reports, pedestrian counts, parking availability | Public cameras (TfL JamCams), municipal sensors |
+| Livestream intelligence | Condition-triggered alerts from any video feed | Trio (ioSwarm + VLM) |
+| Location scoring | Foot traffic, noise, transit access for a given address | Multi-sensor fusion |
+
+This category is unavailable to purely digital agent networks (SingularityNET, Olas, Virtuals) because they lack physical device infrastructure. IoTeX's ioID and DePIN network provide the data ingestion layer.
+
+#### Agent-to-Agent Economy
+
+The most transformative scenario is not humans hiring agents, but **agents hiring agents**:
+
+```
+"Market Research" agent (receives 10 IOTX from client)
+  ├── Posts sub-task to escrow: "scrape competitor pricing" → 1 IOTX
+  │     └── "Web Scraping" agent accepts, executes, delivers, claims 1 IOTX
+  ├── Posts sub-task to escrow: "analyze data trends" → 2 IOTX
+  │     └── "Data Analysis" agent accepts, executes, delivers, claims 2 IOTX
+  ├── Posts sub-task to escrow: "write executive summary" → 1 IOTX
+  │     └── "Report Writing" agent accepts, executes, delivers, claims 1 IOTX
+  └── Retains 6 IOTX (coordination margin)
+      All settlements via on-chain escrow. Zero human involvement.
+```
+
+In this model:
+- Every agent is an on-chain entity (ioID + wallet)
+- Every collaboration is an on-chain transaction (escrow → release)
+- Reputation accumulates automatically (immutable, on-chain)
+- The economy scales beyond human bandwidth — agents operate 24/7, globally, at machine speed
+
+This is an **autonomous economy** that requires crypto rails by construction. No centralized platform can serve it because the participants are not legal persons — they are software processes holding private keys.
+
+#### Phase 3 Summary
+
+| Property | Value |
+|----------|-------|
+| Revenue source | Service fees (per-task or subscription) |
+| Who pays | Protocols, DApps, humans, other agents |
+| Agent role | Autonomous service provider |
+| Chain role | Settlement + identity + reputation + escrow |
+| IoTeX differentiator | Physical-world data via DePIN/ioID |
+| Scale | Unbounded — grows with AI capability and agent-to-agent commerce |
+
+### Three-Phase Summary
+
+| Phase | Revenue | Who Pays | Analogy | Scale Driver |
+|-------|---------|----------|---------|-------------|
+| **1. Subsidy** | Delegate epoch rewards | Delegate operator | Startup burn rate | Delegate count (36) |
+| **2. MEV + Block Building** | Priority fees, MEV | Users, market | Ethereum Builder / Solana BAM | On-chain DeFi activity |
+| **3. Service Marketplace** | Task fees, subscriptions | Protocols, DApps, humans, agents | Keep3r + Fiverr low-end + DePIN data | AI capability × agent-to-agent commerce |
+
+Phase 1 is live today. Phase 2 requires DeFi ecosystem growth and L5 implementation. Phase 3 requires the service marketplace protocol (task escrow, reputation, dispute resolution) — a separate IIP to be proposed.
+
 ## References
 
 ### Ethereum Consensus-Execution Separation
@@ -847,6 +996,13 @@ Three bugs were discovered and fixed during mainnet production (March 2026):
 
 ### Reward Distribution
 - [F1 Fee Distribution (Ojha & Goes, Tokenomics 2019)](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf) — used by Cosmos SDK for staking reward distribution
+
+### Agent Economic Models
+- [Keep3r Network](https://docs.keep3r.network/) — decentralized job marketplace for smart contract automation (Andre Cronje)
+- [Solana BAM (Block Assembly Marketplace)](https://bam.dev/blog/introducing-bam/) — Jito's PBS implementation for Solana
+- [Solana Asynchronous Program Execution](https://www.helius.dev/blog/asynchronous-program-execution) — consensus-execution separation proposal
+- [Solana Alpenglow](https://www.anza.xyz/blog/alpenglow-a-new-consensus-for-solana) — lightweight consensus enabling execution decoupling
+- [Ethereum Stateless Validation](https://ethereum.org/en/roadmap/statelessness/) — Verkle trees and witness-based block verification
 
 ## Copyright
 
