@@ -2,11 +2,15 @@
 IIP: 55
 Title: Dynamic Witness Committee for ioTube
 Author: Haixiang (haixiang@iotex.io) Zhi (zhi@iotex.io)
-Status: Draft
+Status: Superseded
+Superseded-by: IIP-57
 Type: Standards Track
 Category: ioTube
 Created: 2025-12-08
 ```
+
+> **Note (2026-03-16):** This proposal has been **superseded by [IIP-57](iip-57.md)**. Following the ioTube bridge exploit on February 21, 2026 (UTC), the community determined that improving the multisig-based trust model is insufficient — compromising a subset of rotating witnesses remains feasible compared to the mathematical infeasibility of breaking ZK proof soundness. IIP-57 replaces key-based trust entirely with a ZK light client bridge using SP1 proofs to cryptographically verify IoTeX consensus on Ethereum. The content below is retained for historical reference only.
+
 ## Abstract
 
 This proposal introduces a **Dynamic Witness Committee** mechanism for ioTube, the cross-chain bridge for the IoTeX ecosystem. Instead of a static list of witnesses validating all transfers indefinitely, a **Witness Manager** contract selects a subset of witnesses (the "Committee") from a larger pool of candidates for each "epoch" and rotates them over time. The proposal also upgrades the validator contract to **TransferValidatorV3** and introduces **per-token witness sets**, so that each bridged asset can use an appropriate set of witnesses and security parameters while preserving a simple user experience.
