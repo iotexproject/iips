@@ -1,5 +1,5 @@
 ```
-IIP: 25
+IIP: 24
 Title: Raise Block Gas Limit to 50 Million
 Author: Coder Zhi (@CoderZhi), Dustin Xie (dustin.xie@iotex.io)
 Forum discussions: https://community.iotex.io/t/iip-24-raise-block-gas-limit-to-50m/11352
