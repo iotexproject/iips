@@ -12,11 +12,16 @@ Requires: IIP-58
 
 ## Simple Summary
 
-Replace the centralized Hermes reward distribution service with protocol-native, automatic voter reward distribution. Delegates set a commission rate on-chain; the protocol distributes the remaining epoch reward directly to voters proportional to their weighted votes.
+Replace the centralized Hermes reward distribution service with protocol-native, automatic voter reward distribution. Delegates set a commission rate on-chain; the protocol distributes the remaining reward (both block reward and epoch reward) directly to voters proportional to their weighted votes.
 
 ## Abstract
 
-IoTeX currently relies on **Hermes** — a centralized, off-chain service — to distribute delegate staking rewards to voters. This proposal adds a `CommissionRate` field to the delegate registration and modifies the epoch reward grant logic to automatically distribute voter rewards on-chain. When a delegate sets a commission rate, the protocol calculates each voter's proportional share using the existing vote weight formula and credits their reward account directly. Voters claim rewards via the existing `ClaimFromRewardingFund` action. Hermes is fully deprecated once all delegates migrate.
+IoTeX currently relies on **Hermes** — a centralized, off-chain service — to distribute delegate staking rewards to voters. Hermes claims a delegate's entire unclaimed balance (which includes both **block reward** and **epoch reward**) and splits it among voters off-chain. This proposal adds a `CommissionRate` field to the delegate registration and modifies **both** reward grant paths so that the same two streams are split automatically on-chain:
+
+- **Block reward** accumulates into a per-delegate pending pool during the epoch and is distributed together with the epoch reward at the epoch's last block.
+- **Epoch reward** is split with voters directly inside `GrantEpochReward()`.
+
+When a delegate sets a commission rate, the protocol calculates each voter's proportional share using the existing vote weight formula and credits their reward account directly. Voters claim rewards via the existing `ClaimFromRewardingFund` action. Because the same two reward streams that Hermes distributed are covered, voter net income under IIP-59 matches (and slightly exceeds, due to zero service fees) the Hermes era at the same commission rate. Hermes is fully deprecated once all delegates migrate.
 
 ## Motivation
 
@@ -103,54 +108,89 @@ type SetCommissionRate struct {
 - Rate is stored in the candidate's on-chain state
 - Gas cost: ~21,000 (simple state write)
 
-### 3. Modified Epoch Reward Distribution
+### 3. Modified Reward Distribution
 
-The `GrantEpochReward()` function in the rewarding protocol is modified:
+Both `GrantBlockReward()` and `GrantEpochReward()` are modified so that a delegate with `CommissionRate > 0` splits **the entire delegate-side reward flow** with voters — matching what Hermes distributed prior to this proposal (delegate's full unclaimed balance).
+
+Because per-voter distribution is O(voters) work — expensive at 2,000+ voters — the protocol runs it only once per epoch, at the epoch's last block. Block rewards accumulate into a per-delegate pending pool during the epoch and are folded into the single epoch-end distribution call. This keeps per-block cost at O(1) while preserving voter economics.
+
+#### 3.1 Block Reward Accumulation
+
+`GrantBlockReward()` (currently: credit the block reward directly to the block producer's reward account) is modified:
 
 ```go
-func (p *Protocol) GrantEpochReward(ctx context.Context, sm protocol.StateManager) error {
-    // ... existing: identify top delegates, calculate total reward ...
+func (p *Protocol) GrantBlockReward(ctx context.Context, sm protocol.StateManager) (*action.Log, error) {
+    // ... existing: resolve producer → candidate, calculate blockReward ...
 
-    for _, delegate := range topDelegates {
-        totalReward := calculateDelegateReward(delegate, totalVotes)
+    if delegate.CommissionRate > 0 {
+        // NEW: accumulate to per-delegate pending pool; do NOT credit
+        // the delegate's reward account yet. The pool drains at epoch end.
+        return p.addPendingBlockReward(sm, delegate.Identifier, blockReward)
+    }
 
-        if delegate.CommissionRate > 0 {
-            // ── NEW: Auto-distribute to voters ──
-            commission := totalReward * delegate.CommissionRate / 10000
-            p.creditRewardAccount(sm, delegate.Reward, commission)
+    // Legacy: credit block reward to delegate's reward account immediately
+    return p.creditRewardAccount(sm, delegate.Reward, blockReward)
+}
+```
 
-            voterPool := totalReward - commission
-            buckets := p.getBucketsByCandidate(sm, delegate.Owner)
-            totalWeight := big.NewInt(0)
+**Pending pool storage.** A new per-delegate state key:
 
-            // Calculate total weighted votes
-            for _, b := range buckets {
-                if b.isActive() {
-                    totalWeight.Add(totalWeight, b.WeightedVotes())
-                }
+- Namespace: staking protocol
+- Key: `pendingBlockReward || delegateIdentifier` (21 bytes; `delegateIdentifier` is the 20-byte candidate identifier address)
+- Value: `*big.Int` (uncredited accumulated block rewards for this delegate; deleted when drained)
+
+**Properties.**
+- Each block does at most one state read + one state write to the pending pool. No per-voter work at block time.
+- A delegate that produces blocks but exits the top-N before epoch end still has an entry in the pending pool. It is drained at epoch end (see §3.3).
+- Commission rate changes mid-epoch have no effect on already-accumulated block rewards, because the rate applied at drain time is the epoch-frozen rate (the same rate applied to epoch reward, snapshotted at the previous epoch's `PutPollResult` — see §3.4).
+
+#### 3.2 Epoch Reward Split
+
+`GrantEpochReward()` is modified so the per-delegate reward is split with voters when `CommissionRate > 0`:
+
+```go
+// per-delegate loop inside GrantEpochReward
+for _, delegate := range topDelegates {
+    epochReward := calculateDelegateReward(delegate, totalVotes)
+
+    // ── NEW: fold in this delegate's accumulated block rewards ──
+    pending := p.drainPendingBlockReward(sm, delegate.Identifier)
+    totalReward := new(big.Int).Add(epochReward, pending)
+
+    if delegate.CommissionRate > 0 {
+        // ── NEW: Auto-distribute to voters ──
+        commission := totalReward * delegate.CommissionRate / 10000
+        p.creditRewardAccount(sm, delegate.Reward, commission)
+
+        voterPool := totalReward - commission
+        buckets := p.getBucketsByCandidate(sm, delegate.Identifier)
+        totalWeight := big.NewInt(0)
+        for _, b := range buckets {
+            if b.isActive() {
+                totalWeight.Add(totalWeight, b.WeightedVotes())
             }
-
-            // Distribute to each voter proportionally
-            distributed := big.NewInt(0)
-            for _, b := range buckets {
-                if !b.isActive() {
-                    continue
-                }
-                voterShare := new(big.Int).Mul(voterPool, b.WeightedVotes())
-                voterShare.Div(voterShare, totalWeight)
-                p.creditRewardAccount(sm, b.Owner, voterShare)
-                distributed.Add(distributed, voterShare)
-            }
-
-            // Rounding dust goes to delegate
-            dust := new(big.Int).Sub(voterPool, distributed)
-            if dust.Sign() > 0 {
-                p.creditRewardAccount(sm, delegate.Reward, dust)
-            }
-        } else {
-            // Legacy behavior: full reward to delegate
-            p.creditRewardAccount(sm, delegate.Reward, totalReward)
         }
+
+        // Distribute to each voter proportionally, in a deterministic order
+        distributed := big.NewInt(0)
+        for _, b := range sortedByVoter(buckets) {
+            if !b.isActive() {
+                continue
+            }
+            voterShare := new(big.Int).Mul(voterPool, b.WeightedVotes())
+            voterShare.Div(voterShare, totalWeight)
+            p.creditRewardAccount(sm, b.Owner, voterShare)
+            distributed.Add(distributed, voterShare)
+        }
+
+        // Rounding dust (< 1 Rau per voter) goes to delegate
+        dust := new(big.Int).Sub(voterPool, distributed)
+        if dust.Sign() > 0 {
+            p.creditRewardAccount(sm, delegate.Reward, dust)
+        }
+    } else {
+        // Legacy behavior: full combined reward to delegate
+        p.creditRewardAccount(sm, delegate.Reward, totalReward)
     }
 }
 ```
@@ -159,8 +199,44 @@ func (p *Protocol) GrantEpochReward(ctx context.Context, sm protocol.StateManage
 - Runs inside the protocol (Go code), not the EVM — **zero gas cost**
 - Uses the existing `creditRewardAccount()` to credit each voter's unclaimed balance
 - Vote weight calculation uses the same `CalculateVoteWeight()` as consensus
+- Voter iteration is in canonical (sorted-by-address) order — see §3.4 for how the voter list itself is snapshotted deterministically
 - Rounding dust (< 1 Rau per voter) goes to the delegate
 - Only active buckets participate (unstaked/withdrawn buckets excluded)
+
+#### 3.3 Draining Pending Pools for Non-Top-N Delegates
+
+A delegate that produced blocks earlier in the epoch but exits the top-N (e.g. lost votes late in the epoch) still has a non-empty pending pool at epoch end. Leaving those funds stranded would silently confiscate block reward.
+
+At the end of `GrantEpochReward()`, after the top-N loop runs, the protocol iterates the pending-pool namespace and drains any remaining entries:
+
+```go
+for _, entry := range p.allPendingBlockRewards(sm) {
+    delegate := p.candidateCenter.GetByIdentifier(entry.Identifier)
+    if delegate == nil {
+        // Candidate deregistered mid-epoch — return funds to reserve pool.
+        // (This is an edge case; standard behavior is that identifiers persist.)
+        p.returnToReserve(sm, entry.Amount)
+        continue
+    }
+    if delegate.CommissionRate > 0 {
+        p.distributeToVoters(ctx, sm, delegate, entry.Amount)
+    } else {
+        p.creditRewardAccount(sm, delegate.Reward, entry.Amount)
+    }
+    p.clearPendingBlockReward(sm, entry.Identifier)
+}
+```
+
+The pending-pool namespace is bounded by the total registered candidate count (~100), so this is a bounded scan, not O(all keys).
+
+#### 3.4 Commission Rate and Voter Weight Snapshotting
+
+To guarantee deterministic distribution (and prevent last-block stake manipulation), both the commission rate and the per-voter weight list are frozen at the **previous** epoch's `PutPollResult` (mid-epoch). Concretely, at `PutPollResult` time the protocol:
+
+1. Copies each candidate's current `CommissionRate` into that epoch's poll-snapshotted candidate list (which `GrantEpochReward()` reads).
+2. Writes a per-candidate blob of `(voter, weightedVotes)` pairs, sorted by voter address, keyed by candidate identifier.
+
+`distributeToVoters()` reads the frozen voter list (not the live staking view) at epoch end. Any stake activity between `PutPollResult` and the epoch's last block does not shift this epoch's distribution — it takes effect at the following `PutPollResult`. This gives voters a roughly 1.5-epoch reaction window when a delegate raises its commission rate: the change takes effect at the next `PutPollResult` (mid-epoch) and applies to rewards in the epoch after that.
 
 ### 4. Voter Claim Flow
 
@@ -195,8 +271,10 @@ Voters claim accumulated rewards using the **existing** `ClaimFromRewardingFund`
 | 6 | Archive Hermes repositories | Final cleanup |
 
 Delegates can opt in at their own pace. During the transition period:
-- `CommissionRate = 0`: Hermes continues (legacy behavior)
-- `CommissionRate > 0`: Protocol handles distribution automatically
+- `CommissionRate = 0`: Legacy behavior — block reward is credited to the delegate's reward account per block; epoch reward is credited whole. Delegate uses Hermes or distributes manually.
+- `CommissionRate > 0`: Protocol handles distribution of **both** block and epoch reward automatically.
+
+**Rate mapping from Hermes era.** Because IIP-59 auto-distributes the same two reward streams that Hermes distributed (block + epoch), a delegate that ran Hermes at an effective X% take can migrate by setting `CommissionRate = X * 100` bps. No upward adjustment is needed to compensate for block reward, and voters' net income at least matches the Hermes era (in practice slightly higher, since IIP-59 charges no service fee).
 
 ### 6. ioctl Integration
 
@@ -280,7 +358,54 @@ func (p *Protocol) handleSetCommissionRate(ctx context.Context, act *action.SetC
 }
 ```
 
-#### 7.3 Modified GrantEpochReward (`action/protocol/rewarding/reward.go`)
+#### 7.3 Modified GrantBlockReward (`action/protocol/rewarding/reward.go`)
+
+```go
+func (p *Protocol) GrantBlockReward(ctx context.Context, sm protocol.StateManager) (*action.Log, error) {
+    blkCtx := protocol.MustGetBlockCtx(ctx)
+    featureCtx := protocol.MustGetFeatureCtx(ctx)
+
+    // ... existing: read producer, resolve to delegate, compute blockReward ...
+
+    if featureCtx.EnableVoterRewardDistribution && delegate.CommissionRate > 0 {
+        // NEW: accumulate to per-delegate pending pool instead of crediting now.
+        // The pool is drained and folded into the voter distribution in GrantEpochReward.
+        if err := p.addPendingBlockReward(sm, delegate.Identifier, blockReward); err != nil {
+            return nil, err
+        }
+        return &action.Log{
+            Address: p.addr.String(),
+            Topics:  []hash.Hash256{hash.BytesToHash256([]byte("BlockRewardPending"))},
+            Data:    append(delegate.Identifier.Bytes(), blockReward.Bytes()...),
+        }, nil
+    }
+
+    // Legacy path: credit delegate immediately.
+    return p.creditRewardAccount(sm, delegate.Reward, blockReward)
+}
+
+// addPendingBlockReward reads the delegate's current pending pool, adds blockReward,
+// and writes it back. State key: pendingBlockReward || delegate.Identifier (21 bytes).
+func (p *Protocol) addPendingBlockReward(
+    sm protocol.StateManager,
+    delegateID address.Address,
+    blockReward *big.Int,
+) error {
+    key := pendingBlockRewardKey(delegateID)
+    var pool pendingBlockRewardPool
+    switch _, err := sm.State(&pool, protocol.KeyOption(key)); errors.Cause(err) {
+    case nil, state.ErrStateNotExist:
+        // ok — nil-value or missing both start from zero
+    default:
+        return err
+    }
+    pool.Amount = new(big.Int).Add(pool.Amount, blockReward)
+    _, err := sm.PutState(&pool, protocol.KeyOption(key))
+    return err
+}
+```
+
+#### 7.4 Modified GrantEpochReward (`action/protocol/rewarding/reward.go`)
 
 ```go
 func (p *Protocol) GrantEpochReward(ctx context.Context, sm protocol.StateManager) ([]*action.Log, error) {
@@ -302,33 +427,50 @@ func (p *Protocol) GrantEpochReward(ctx context.Context, sm protocol.StateManage
 
     var logs []*action.Log
     for i, delegate := range topDelegates {
-        delegateReward := rewardPerDelegate[i]
+        epochReward := rewardPerDelegate[i]
 
-        // ── NEW: Check for auto-distribution ──
+        // Fold in this delegate's accumulated block rewards.
+        pending, err := p.drainPendingBlockReward(sm, delegate.Identifier)
+        if err != nil {
+            return nil, err
+        }
+        totalReward := new(big.Int).Add(epochReward, pending)
+
         if delegate.CommissionRate > 0 {
-            rewardLogs, err := p.distributeToVoters(ctx, sm, delegate, delegateReward)
+            rewardLogs, err := p.distributeToVoters(ctx, sm, delegate, totalReward)
             if err != nil {
                 return nil, errors.Wrap(err, "distribute to voters")
             }
             logs = append(logs, rewardLogs...)
         } else {
-            // Legacy: full reward to delegate
-            if err := p.credit(sm, delegate.Reward, delegateReward); err != nil {
+            // Legacy: full combined reward to delegate.
+            if err := p.credit(sm, delegate.Reward, totalReward); err != nil {
                 return nil, err
             }
         }
     }
+
+    // Drain any pending pools left by delegates that produced blocks earlier but
+    // exited the top-N before epoch end (see §3.3). Bounded by candidate count.
+    drainLogs, err := p.drainOrphanPendingPools(ctx, sm)
+    if err != nil {
+        return nil, err
+    }
+    logs = append(logs, drainLogs...)
     return logs, nil
 }
 
-// distributeToVoters splits a delegate's epoch reward between commission and voters
+// distributeToVoters splits totalReward between the delegate's commission
+// and the voter pool. Voter list and per-voter weights are read from the
+// snapshot written at the previous epoch's PutPollResult (§3.4), not the
+// live staking view.
 func (p *Protocol) distributeToVoters(
     ctx context.Context,
     sm protocol.StateManager,
-    delegate *staking.Candidate,
+    delegate *state.Candidate,   // poll snapshot; carries frozen CommissionRate
     totalReward *big.Int,
 ) ([]*action.Log, error) {
-    // 1. Calculate delegate commission
+    // 1. Delegate commission (rounded down)
     commission := delegate.CommissionCut(totalReward)
     if err := p.credit(sm, delegate.Reward, commission); err != nil {
         return nil, err
@@ -339,38 +481,37 @@ func (p *Protocol) distributeToVoters(
         return nil, nil
     }
 
-    // 2. Get all active buckets for this delegate
+    // 2. Read the frozen voter list snapshotted at the previous PutPollResult
     stakingProtocol := staking.MustGetProtocol(protocol.MustGetRegistry(ctx))
-    buckets, err := stakingProtocol.GetActiveBucketsByCandidate(sm, delegate.Owner)
+    candIdentifier, err := address.FromString(delegate.Identity)
     if err != nil {
         return nil, err
     }
-
-    // 3. Calculate total weighted votes
-    totalWeight := big.NewInt(0)
-    type bucketWeight struct {
-        owner  address.Address
-        weight *big.Int
+    voters, err := stakingProtocol.SnapshotVoterWeightsByCandidate(sm, candIdentifier)
+    if err != nil {
+        return nil, err
     }
-    weights := make([]bucketWeight, 0, len(buckets))
-    for _, b := range buckets {
-        w := staking.CalculateVoteWeight(b, false) // false = not self-stake for weight calc
-        totalWeight.Add(totalWeight, w)
-        weights = append(weights, bucketWeight{owner: b.Owner, weight: w})
-    }
-
-    if totalWeight.Sign() == 0 {
-        // No active voters — full reward to delegate
+    if len(voters) == 0 {
+        // No voters snapshotted — full remainder to delegate.
         return nil, p.credit(sm, delegate.Reward, voterPool)
     }
 
-    // 4. Distribute proportionally
+    // 3. Total weight
+    totalWeight := big.NewInt(0)
+    for _, v := range voters {
+        totalWeight.Add(totalWeight, v.Weight)
+    }
+    if totalWeight.Sign() == 0 {
+        return nil, p.credit(sm, delegate.Reward, voterPool)
+    }
+
+    // 4. Distribute in the snapshot's canonical (sorted-by-voter) order
     distributed := big.NewInt(0)
-    for _, bw := range weights {
-        share := new(big.Int).Mul(voterPool, bw.weight)
+    for _, v := range voters {
+        share := new(big.Int).Mul(voterPool, v.Weight)
         share.Div(share, totalWeight)
         if share.Sign() > 0 {
-            if err := p.credit(sm, bw.owner, share); err != nil {
+            if err := p.credit(sm, v.Voter, share); err != nil {
                 return nil, err
             }
             distributed.Add(distributed, share)
@@ -389,44 +530,81 @@ func (p *Protocol) distributeToVoters(
         Address: p.addr.String(),
         Topics:  []hash.Hash256{hash.BytesToHash256([]byte("VoterRewardDistributed"))},
         Data: append(
-            delegate.Owner.Bytes(),
+            candIdentifier.Bytes(),
             append(commission.Bytes(), voterPool.Bytes()...)...,
         ),
     }}, nil
 }
 ```
 
-#### 7.4 GetActiveBucketsByCandidate Helper (`action/protocol/staking/protocol.go`)
+#### 7.5 Voter Weight Snapshot (`action/protocol/staking/voter_weight_snapshot.go`)
+
+At each `PutPollResult`, alongside the commission-rate snapshot, the staking protocol writes a per-candidate blob of the frozen voter list:
 
 ```go
-// GetActiveBucketsByCandidate returns all non-unstaked buckets for a delegate
-func (p *Protocol) GetActiveBucketsByCandidate(
-    sm protocol.StateReader,
-    candidateOwner address.Address,
-) ([]*VoteBucket, error) {
-    // Read bucket indices for this candidate
-    indices, err := p.candBucketIndices(sm, candidateOwner)
-    if err != nil {
-        return nil, err
-    }
+// Key layout: 1-byte tag + 20-byte candidate identifier.
+func voterWeightSnapKey(candID address.Address) []byte {
+    out := make([]byte, 1+len(candID.Bytes()))
+    out[0] = _voterWeightSnap
+    copy(out[1:], candID.Bytes())
+    return out
+}
 
-    var active []*VoteBucket
-    for _, idx := range indices.indices() {
-        b, err := p.getBucket(sm, idx)
-        if err != nil {
-            continue // bucket may have been withdrawn
-        }
-        // Skip unstaked buckets
-        if b.UnstakeStartTime != nil && !b.UnstakeStartTime.IsZero() {
-            continue
-        }
-        active = append(active, b)
+// SnapshotVoterWeights writes each candidate's live voter list to state.
+// Called from poll.setCandidates at PutPollResult, gated on the feature flag.
+// Incremental: unchanged blobs are skipped (byte equality); candidates whose
+// voter list is now empty have their blob DelState'd.
+func (p *Protocol) SnapshotVoterWeights(sm protocol.StateManager) error {
+    csr, err := ConstructBaseView(sm)
+    if err != nil {
+        return err
     }
-    return active, nil
+    vd := csr.BaseView()
+    if vd.voterWeights == nil {
+        return nil
+    }
+    for _, cand := range vd.candCenter.All() {
+        candID := cand.GetIdentifier()
+        liveVoters := readSortedLiveVoters(vd.voterWeights, hash.BytesToHash160(candID.Bytes()))
+        _, newBlob, err := encodeVoterWeightSnapshot(liveVoters)
+        if err != nil {
+            return err
+        }
+        key := voterWeightSnapKey(candID)
+        oldBlob, err := readSnapshotBlob(sm, key)
+        if err != nil {
+            return err
+        }
+        switch {
+        case newBlob == nil && oldBlob != nil:
+            sm.DelState(protocol.NamespaceOption(_stakingNameSpace), protocol.KeyOption(key))
+        case newBlob != nil && !bytes.Equal(oldBlob, newBlob):
+            sm.PutState(pbFromBlob(newBlob), protocol.NamespaceOption(_stakingNameSpace), protocol.KeyOption(key))
+        }
+    }
+    return nil
+}
+
+// SnapshotVoterWeightsByCandidate is the reader consumed by distributeToVoters.
+// Returns nil (not error) when a candidate has no snapshot — the caller treats
+// this as "no voters" and credits the delegate.
+func (p *Protocol) SnapshotVoterWeightsByCandidate(
+    sr protocol.StateReader,
+    candID address.Address,
+) ([]VoterWeight, error) {
+    // ... State() with switch on state.ErrStateNotExist → decode → return ...
 }
 ```
 
-#### 7.5 Action Definition (`action/setcommissionrate.go`)
+**Why per-candidate blob rather than flat `(candidate, voter)` keys:** the state API does not support prefix iteration, so a flat layout would require an auxiliary index keyed by candidate. The per-candidate blob lets a single `State()` read return the entire voter list a delegate needs.
+
+**Determinism invariant.** The blob writer sorts by voter address before encoding; the reader consumes in that same order. Because the encoding is byte-deterministic for equal logical inputs, the "skip if unchanged" check in `SnapshotVoterWeights` is safe: unchanged voter sets produce byte-identical blobs across nodes.
+
+#### 7.6 GetActiveBucketsByCandidate — no longer used
+
+The PoC's `GetActiveBucketsByCandidate` helper is not needed in the final design: voter reward distribution reads from the snapshot (§7.5), not from live bucket state. This eliminates a whole class of edge cases — mid-epoch stake changes, indexer readiness skew across nodes, and self-stake bucket misclassification — that would otherwise need per-call handling in the reward path.
+
+#### 7.7 Action Definition (`action/setcommissionrate.go`)
 
 ```go
 package action
@@ -456,7 +634,7 @@ func (s *SetCommissionRate) Serialize() []byte {
 }
 ```
 
-#### 7.6 Protobuf Extension (`iotextypes/action.proto`)
+#### 7.8 Protobuf Extension (`iotextypes/action.proto`)
 
 ```protobuf
 // SetCommissionRate sets a delegate's voter reward commission rate
@@ -491,12 +669,20 @@ Using basis points (1/100th of a percent) provides sufficient granularity:
 
 ### Why Epoch-Boundary Rate Changes
 
-Commission rate changes take effect at the next epoch boundary, not immediately. This prevents a delegate from:
+Commission rate changes take effect at the epoch boundary that follows the next `PutPollResult`, not immediately. This prevents a delegate from:
 1. Setting 0% commission to attract voters
 2. Switching to 100% right before epoch reward distribution
 3. Switching back to 0%
 
-Epoch-boundary enforcement gives voters time to react to rate changes.
+The `PutPollResult`-anchored snapshot gives voters a roughly 1.5-epoch reaction window to observe a rate change and re-stake or unstake before it applies to a distribution.
+
+### Why Fold Block Reward Instead of Distributing Per Block
+
+Distributing block reward to voters at every block would run the per-voter loop up to ~100 times per epoch — expensive at 2,000+ voters per delegate and duplicative, since the same voter list is read each time. Accumulating block reward in a per-delegate pending pool during the epoch and folding it into the single epoch-end distribution has three properties that make it strictly better than per-block distribution:
+
+- **Per-block cost stays O(1):** one state read + one state write per produced block, independent of voter count.
+- **One deterministic distribution per epoch:** the same snapshot-based voter list and weights are used for both the epoch reward and the folded block reward, guaranteeing identical per-voter shares across nodes.
+- **Voter economics are preserved:** total voter income is identical to per-block distribution, because commission is applied to the sum `epochReward + Σ blockReward`, and the commission rate is constant across the epoch (frozen at the previous `PutPollResult`).
 
 ### Why Not Mandatory Auto-Distribution
 
@@ -507,20 +693,28 @@ Epoch-boundary enforcement gives voters time to react to rate changes.
 
 ### Performance Impact
 
-Iterating over voter buckets during `GrantEpochReward`:
-- Top delegates have ~2,000–4,000 buckets
-- Total across all 36 delegates: ~40,000 buckets
+Two hot paths are affected: `GrantBlockReward` (every block) and `GrantEpochReward` (once per epoch).
+
+**Per-block (`GrantBlockReward`).** Under IIP-59 the block reward is accumulated into a per-delegate pending pool instead of credited directly. Extra work per block: exactly one state read and one state write against a 21-byte key. No per-voter iteration. Overhead: sub-millisecond.
+
+**Per-epoch (`GrantEpochReward`).** The per-voter distribution runs once per delegate at the epoch's last block:
+
+- Top delegates have ~2,000–4,000 voters after the snapshot (§3.4)
+- Total across all 36 delegates: ~40,000 voter credits per epoch
 - Each iteration: 1 multiplication + 1 division + 1 state write
+- One additional per-delegate call reads the snapshot blob (§7.5); the blob is a single `State()` read, not a loop over indices
 - Total additional time: <10ms per epoch (negligible vs. 5-second block time)
-- Memory: bucket data is already loaded by the staking protocol
+
+**Per-PutPollResult (mid-epoch).** The snapshot writer walks all candidates (~100) and writes only the ones whose voter list changed. This adds one `State()` read + at most one `PutState`/`DelState` per candidate, run once per epoch. Overhead: a few milliseconds, dominated by proto marshal of changed blobs.
 
 ## Backwards Compatibility
 
-- **Consensus change**: Yes — modifies `GrantEpochReward()` output. Requires hard fork.
-- **State schema change**: Yes — adds `CommissionRate` to `Candidate` struct. Requires state migration.
-- **Default behavior**: `CommissionRate = 0` preserves exact legacy behavior. No existing delegate or voter is affected until the delegate explicitly opts in.
+- **Consensus change**: Yes — modifies both `GrantBlockReward()` and `GrantEpochReward()` output when `CommissionRate > 0`. Requires hard fork.
+- **State schema change**: Yes — adds `CommissionRate` to `Candidate` struct, adds the per-delegate pending block reward pool, adds the per-candidate voter weight snapshot blob. Requires state migration.
+- **Default behavior**: `CommissionRate = 0` preserves exact legacy behavior — block reward is credited per block, epoch reward whole. No existing delegate or voter is affected until the delegate explicitly opts in.
 - **RPC compatibility**: Existing `ReadStakingData` APIs are unaffected. New `CommissionRate` field is added to `Candidate` query responses.
 - **Hermes compatibility**: Hermes can continue operating for delegates with `CommissionRate = 0`. No conflict.
+- **Restart safety**: The pending block reward pool and voter weight snapshot are persisted in state, so a node restart mid-epoch does not lose already-accumulated block rewards or the frozen voter list.
 
 ## Test Cases
 
@@ -565,6 +759,22 @@ Iterating over voter buckets during `GrantEpochReward`:
 - Voter has 3 buckets staked to same delegate
 - Expected: Each bucket's weighted vote counted separately. Total voter reward = sum of per-bucket shares.
 
+### 9. Block Reward Folding
+
+- Delegate with 1000 bps commission produces 40 blocks in the epoch, each block reward 8 IOTX (total 320 IOTX pending)
+- Epoch reward for the delegate is 100 IOTX
+- Expected at epoch end: `totalReward = 420 IOTX`; delegate commission = 42 IOTX; voter pool = 378 IOTX distributed by frozen snapshot weights. No block-reward IOTX is stranded in the pending pool after `GrantEpochReward`.
+
+### 10. Non-Top-N Delegate Pending Drain
+
+- Delegate produced 10 blocks (80 IOTX pending), then lost votes and dropped out of top-N at epoch end
+- Expected: no epoch reward assigned; the 80 IOTX pending pool is drained by the trailing loop (§3.3); at commission=1000 bps, delegate gets 8 IOTX and voters share 72 IOTX by the snapshotted list.
+
+### 11. Voter Weight Snapshot Reaction Window
+
+- Delegate raises commission from 500 → 2000 bps in epoch N, `SetCommissionRate` receipt lands before epoch N's `PutPollResult`
+- Expected: epoch N's rewards still use 500 bps (already snapshotted). Epoch N+1 rewards use 2000 bps. A voter that unstakes in epoch N after `PutPollResult` is still counted in epoch N's distribution (snapshotted before the unstake) but not epoch N+1.
+
 ## Implementation
 
 ### Reference Implementation
@@ -576,9 +786,15 @@ A proof-of-concept bot demonstrating the core logic (voter weight calculation, p
 
 | File | Change |
 |------|--------|
-| `action/protocol/staking/candidate.go` | Add `CommissionRate` field to `Candidate` struct |
-| `action/protocol/staking/handlers.go` | Add `handleSetCommissionRate` action handler |
-| `action/protocol/rewarding/reward.go` | Modify `GrantEpochReward()` to distribute to voters |
+| `action/protocol/context.go` | Add `EnableVoterRewardDistribution` (or the equivalent `!NoVoterRewardDistribution`) feature flag |
+| `action/protocol/staking/candidate.go` | Add `CommissionRate` (+ `CommissionRateLastEpoch`) field to `Candidate` struct |
+| `action/protocol/staking/handlers.go` | Add `handleSetCommissionRate` action handler; wire voter-weight-view deltas into all stake-mutating handlers |
+| `action/protocol/staking/voter_weight_view.go` | Incremental per-candidate sorted voter weight list backing the snapshot writer |
+| `action/protocol/staking/voter_weight_snapshot.go` | Per-candidate blob writer/reader (§7.5), invoked from `PutPollResult` |
+| `action/protocol/poll/util.go` | Call `snapshotCommissionRates` + `SnapshotVoterWeights` in `setCandidates` |
+| `action/protocol/rewarding/voter_reward.go` | `distributeToVoters` implementation reading the snapshot |
+| `action/protocol/rewarding/reward.go` | Modify `GrantBlockReward()` to route to pending pool; modify `GrantEpochReward()` to fold pending + call `distributeToVoters`; orphan pool drain |
+| `state/candidate.go` | Add `CommissionRate` field to `state.Candidate` (poll snapshot) |
 | `action/protocol/staking/staking_statereader.go` | Expose `CommissionRate` in candidate queries |
 | `api/grpcserver.go` | Surface `CommissionRate` in gRPC responses |
 
@@ -593,6 +809,8 @@ The protocol change is activated at a designated block height via the genesis co
 - **Rounding attacks**: Total distributed ≤ total voter pool (guaranteed by integer division). Dust goes to delegate, not lost.
 - **Reward account overflow**: Uses `*big.Int` arithmetic — no overflow possible.
 - **Denial of service**: The per-epoch iteration is bounded by total bucket count (~40,000 across all delegates). Execution time is O(N) in the number of buckets, which is already bounded by the staking protocol.
+- **Pending pool integrity**: Block rewards routed to the per-delegate pending pool are drained exactly once at epoch end — either by the top-N loop (§3.2) or by the trailing orphan-drain loop (§3.3). No path leaves a pool entry across epoch boundaries; nodes cannot silently confiscate a block-producing delegate's reward. Snapshot writes and pool writes both go through the standard state manager, so restart safety and Fork/Snapshot/Revert semantics apply automatically.
+- **Snapshot determinism**: The voter weight snapshot (§7.5) is written per-candidate as a proto blob with voters sorted by address. The "skip if bytes unchanged" write path is safe only because the encoding is a pure function of the sorted logical list; any implementation that changes the sort key or adds non-deterministic fields (e.g. iteration order of a map) would break this invariant and cause block-hash divergence.
 
 ## References
 
