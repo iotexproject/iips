@@ -79,82 +79,83 @@ Protocol-native distribution costs zero gas (runs in Go inside the block executo
 
 ### 0. Architecture Overview
 
-The design has four stages, read left-to-right: **(1)** the config surface (existing operator UX) — `DelegateProfile` for rates, a new opt-in flag on `Candidate`; **(2)** at every epoch boundary, `PutPollResult` freezes rates, opt-in, and voter weights into a single `PollSnapshot`; **(3)** the rewarding protocol reads that snapshot per block and per epoch, folding block rewards into a per-delegate pending pool between epochs; **(4)** at epoch close, distribution routes each voter's share through `AutoDeposit` (compound if the voter has an active bucket, otherwise pull-claim) and pays commission to the delegate. Off-chain Hermes v1 continues to serve opt-out delegates on the side.
-
-The overview below is split into two diagrams so that no arrow terminates on a group boundary — every arrow points to (or from) a specific named node.
-
-**Diagram A — Snapshot pipeline (at each epoch boundary).** `PutPollResult` reads the live rate from `DelegateProfile` and the opt-in flag from the `Candidate` record, and combines them with the voter weight snapshot (built incrementally by the staking protocol across the epoch) into a single frozen `PollSnapshot`. That snapshot is the sole input the rewarding protocol reads during the following epoch.
+The design reuses two existing EVM contracts (`DelegateProfile`, `AutoDeposit`) as the operator-facing configuration surface, freezes their values into a per-epoch poll snapshot, and consumes that snapshot from the rewarding protocol. Off-chain Hermes v1 continues to serve delegates that have not opted in.
 
 ```mermaid
-flowchart LR
+flowchart TB
+    classDef actor fill:#fff,stroke:#333,color:#000
     classDef contract fill:#e3f2fd,stroke:#1976d2,color:#000
     classDef state fill:#fff3e0,stroke:#f57c00,color:#000
-    classDef proc fill:#e8f5e9,stroke:#388e3c,color:#000
+    classDef process fill:#e8f5e9,stroke:#388e3c,color:#000
+    classDef offchain fill:#fce4ec,stroke:#c2185b,color:#000
 
-    Profile["DelegateProfile<br/><i>EVM contract</i>"]:::contract
-    Candidate["Candidate.OptIn<br/><i>native flag</i>"]:::state
-    VWView["VoterWeightView<br/><i>incremental, per delegate</i>"]:::state
+    Del(["Delegate"]):::actor
+    Voter(["Voter"]):::actor
 
-    PutPoll["PutPollResult<br/><i>@ epoch boundary</i>"]:::proc
+    subgraph contracts["Reused EVM Contracts (existing, operator-facing)"]
+        direction LR
+        Profile["<b>DelegateProfile</b><br/>portion → invert → commission<br/><i>rate source</i>"]:::contract
+        AutoDep["<b>AutoDeposit</b><br/>bucket lookup + AddDeposit<br/><i>compound source</i>"]:::contract
+    end
 
-    PollSnap["PollSnapshot<br/>· optIn<br/>· blockCommRate<br/>· epochCommRate<br/>· voterWeights"]:::state
+    subgraph staking["staking.Protocol"]
+        CandState["<b>state.Candidate</b> (extended)<br/>+ VoterRewardOnchainOptIn<br/>+ BlockCommissionRate<br/>+ EpochCommissionRate"]:::state
+        VWView["<b>VoterWeightView</b><br/>incremental per-delegate<br/>sorted voter weights"]:::state
+    end
 
-    Profile -->|"getEncodedProfile → invert to commission"| PutPoll
-    Candidate -->|"read flag"| PutPoll
-    VWView -->|"read sorted weights"| PutPoll
-    PutPoll -->|"freeze"| PollSnap
-```
+    subgraph poll["poll.Protocol — PutPollResult (epoch boundary)"]
+        direction TB
+        SnapProc["SnapshotCommissionRates +<br/>SnapshotVoterWeights +<br/>SnapshotOptIn"]:::process
+        PollSnap["<b>PollSnapshot</b> (frozen, per epoch)<br/>{ optIn, blockCommRate,<br/>epochCommRate, voterWeights }"]:::state
+    end
 
-**Diagram B — Reward flow (during the epoch that follows).** Every arrow below terminates on a specific reward account or the `AutoDeposit` router; there are no group-level arrows.
+    subgraph rewarding["rewarding.Protocol"]
+        direction TB
+        GBR{"<b>GrantBlockReward</b><br/>opt-in eligible?"}:::process
+        Pool["<b>PendingBlockRewardPool</b><br/>{ delegate → amount,<br/>frozen blockCommRate }"]:::state
+        GER["<b>GrantEpochReward</b><br/>drain pool + fold epoch reward<br/>→ distributeToVoters"]:::process
+    end
 
-```mermaid
-flowchart LR
-    classDef state fill:#fff3e0,stroke:#f57c00,color:#000
-    classDef proc fill:#e8f5e9,stroke:#388e3c,color:#000
-    classDef contract fill:#e3f2fd,stroke:#1976d2,color:#000
-    classDef sink fill:#f3e5f5,stroke:#7b1fa2,color:#000
-    classDef legacy fill:#fce4ec,stroke:#c2185b,color:#000
+    Unclaimed["Voter<br/>unclaimedBalance"]:::state
+    DelReward["Delegate<br/>RewardAddress"]:::state
+    Hermes["<b>Hermes v1 Service</b><br/>opt-out delegates only<br/>(off-chain, unchanged)"]:::offchain
 
-    PollSnap["PollSnapshot<br/><i>frozen this epoch</i>"]:::state
+    Del -->|"setProfile<br/>(unchanged UX)"| Profile
+    Del -->|"SetVoterRewardOptIn<br/>(new action)"| CandState
+    Voter -->|"register bucket<br/>(unchanged UX)"| AutoDep
+    Voter -->|"stake / unstake<br/>events"| VWView
 
-    GBR["GrantBlockReward<br/><i>per block</i>"]:::proc
-    Pool[("PendingPool<br/><i>per delegate</i>")]:::state
-    GER["GrantEpochReward<br/><i>per epoch</i>"]:::proc
+    CandState -.->|"read"| SnapProc
+    Profile -.->|"getEncodedProfile"| SnapProc
+    VWView -.->|"read"| SnapProc
+    SnapProc --> PollSnap
 
-    AutoDep["AutoDeposit<br/><i>voter router</i>"]:::contract
+    PollSnap -.->|"per-block: optIn<br/>+ blockCommRate"| GBR
+    GBR -->|"yes: base reward"| Pool
+    GBR -->|"tip (always)"| DelReward
+    GBR -->|"no / ineligible:<br/>full amount"| DelReward
 
-    DelReward["Delegate.RewardAddress"]:::sink
-    Bucket["Voter bucket<br/><i>(compounded)</i>"]:::sink
-    Unclaimed["Voter.unclaimedBalance"]:::sink
+    Pool --> GER
+    PollSnap -.->|"weights + rates"| GER
 
-    Hermes["Hermes v1<br/><i>off-chain</i>"]:::legacy
-
-    PollSnap -.->|"optIn + blockCommRate"| GBR
-    PollSnap -.->|"epochCommRate + voterWeights"| GER
-
-    GBR -->|"opt-in + eligible: base reward"| Pool
-    GBR -->|"tip (always) + ineligible amount"| DelReward
-    Pool -->|"drain @ epoch close"| GER
-
+    GER -->|"per voter share:<br/>active bucket?"| AutoDep
+    AutoDep -->|"AddDeposit → voter bucket"| Voter
+    GER -->|"else: voter share"| Unclaimed
     GER -->|"commission"| DelReward
-    GER -->|"per-voter share"| AutoDep
+    GER -.->|"opt-out delegates:<br/>full epoch amount"| DelReward
 
-    AutoDep -->|"active bucket → AddDeposit"| Bucket
-    AutoDep -->|"else fall through"| Unclaimed
-
-    DelReward -.->|"reads opt-out delegates only"| Hermes
-    Hermes -.->|"off-chain split"| Unclaimed
+    DelReward -.->|"scans opt-out delegates only"| Hermes
+    Hermes -.->|"legacy off-chain split"| Unclaimed
+    Voter -->|"ClaimFromRewardingFund<br/>(unchanged action)"| Unclaimed
 ```
 
-**Reading guide.** Solid arrows are on-chain writes/transfers; dashed arrows are reads (snapshotting, off-chain observation). Diagram A covers §3.4 (snapshotting) plus the reads defined by §3.5 (DelegateProfile) and §3.7 (opt-in). Diagram B covers §3.1 (block routing), §3.2 (epoch split), §3.3 (pool drain), §3.6 (`AutoDeposit` compound router), and the Hermes coexistence path from §3.7.
+**Reading guide.** Solid arrows are on-chain writes/transfers; dashed arrows are reads (snapshotting, off-chain observation). The three colored bands map to §1–§2 (staking state), §3.4 (poll snapshot), and §3.1–§3.7 (rewarding protocol). §3.5 covers the `DelegateProfile` read, §3.6 the `AutoDeposit` compound routing, and §3.7 the opt-in gate that partitions traffic between the on-chain path and Hermes v1.
 
-Actor writes are omitted for readability — delegates configure rates via `DelegateProfile.setProfile` and opt in via `SetVoterRewardOptIn`; voters register compound preference via `AutoDeposit`; all three are unchanged from today's operator UX.
-
-**Key design invariants** made explicit by the shape of the diagrams:
+**Key design invariants** enforced by the diagram:
 
 1. **Rates and opt-in are read once per epoch**, at `PutPollResult`, and frozen. `GrantBlockReward` and `GrantEpochReward` never re-read the contract or the live candidate — they only consume the snapshot. Guarantees deterministic replay under Fork/Snapshot/Revert.
 2. **Block reward tips (`effectiveTip`) always go to the producer directly**, regardless of opt-in state. Only the base block reward is subject to the split.
-3. **`AutoDeposit` sits on the voter-share arrow at drain time**, not on the snapshot. Compound preference is an at-source decision by the voter and does not affect consensus math — a failed contract call falls through to `unclaimedBalance` (see §3.6).
+3. **`AutoDeposit` is queried per voter at drain time**, not snapshotted. Compound preference is an at-source decision by the voter and does not affect consensus math — a failed contract call falls through to `unclaimedBalance` (see §3.6).
 4. **Off-chain Hermes MUST filter opted-in delegates** at the same snapshot boundary, else voters are double-paid. See Security Considerations for the coexistence protocol.
 
 ### 1. Candidate Registration Extension
