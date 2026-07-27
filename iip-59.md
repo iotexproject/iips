@@ -7,1525 +7,1158 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-20
+Updated: 2026-07-21
 Requires: IIP-58
+Supersedes: (rev 1, rev 2 amendment)
 ```
 
 ## Simple Summary
 
-Replace the centralized Hermes reward distribution service with protocol-native, automatic voter reward distribution. Delegates keep the existing on-chain commission source (the `DelegateProfile` contract that Hermes reads today), and the protocol distributes the remaining reward (both block reward and epoch reward) directly to voters proportional to their weighted votes. Compound (reinvest into an existing native bucket) is preserved by reusing the existing `AutoDeposit` contract. Migration is per-delegate opt-in: legacy path stays live until a delegate explicitly switches.
+Fold the Hermes off-chain reward-distribution service into the protocol. At each
+epoch boundary, the protocol pays delegate commission immediately and credits
+each opted-in delegate's voter share to a per-delegate pending pool. The pool is
+drained over the following *reward era* (default 24 epochs) as a cursor-driven
+system action, `GrantVoterRewardChunk`, executed on every non-epoch-boundary
+block, bounded by two per-block caps (`VoterBudgetPerBlock`,
+`CompoundBatchSize`). Compound (reinvest to an existing native bucket) is
+resolved inline against the existing `AutoDeposit` contract. Migration is
+per-delegate opt-in via a new `SetVoterRewardOptIn` action; delegates that do
+not opt in retain full legacy behavior (Hermes continues to serve them).
 
 ## Abstract
 
-IoTeX currently relies on **Hermes** — a centralized, off-chain service — to distribute delegate staking rewards to voters. Hermes claims a delegate's entire unclaimed balance (which includes both **block reward** and **epoch reward**) and splits it among voters off-chain, using two production contracts as its source of truth:
+IoTeX currently relies on **Hermes** — a centralized, off-chain service — to
+distribute delegate rewards to voters. Hermes claims a delegate's unclaimed
+balance (block + epoch reward) and splits it among voters off-chain, using two
+production contracts as its source of truth:
 
-1. **`DelegateProfile`** (mainnet `0xfa7f50866ac45d84adf54bc767c885f92750e258`) — per-delegate voter split percentages for each reward stream, updated by delegates or by an authorized owner.
-2. **`AutoDeposit`** (mainnet `io108ckwzlzpkhva7cnfceajlu7wu6ql5kq95uat9`) — per-voter compound preference (native bucket ID to reinvest into).
+1. **`DelegateProfile`** (mainnet `0xfa7f50866ac45d84adf54bc767c885f92750e258`)
+   — per-delegate voter split percentages for each reward stream.
+2. **`AutoDeposit`** (mainnet `io108ckwzlzpkhva7cnfceajlu7wu6ql5kq95uat9`)
+   — per-voter compound preference (native bucket ID to reinvest into).
 
-This proposal folds Hermes's distribution logic into the block executor while preserving both contracts as the operator-facing sources of truth:
+IIP-59 replaces Hermes's split logic with an in-protocol pipeline that reads
+the same two contracts and applies the same math. The result is voter-net
+income at or slightly above the Hermes rate (no service fee), with per-voter
+payouts becoming consensus-verifiable events.
 
-- **Commission rates** — read from `DelegateProfile` at the previous epoch's `PutPollResult` and frozen into the poll snapshot. Two independent basis-point rates (block-stream and epoch-stream) replace the single `CommissionRate` field, matching the two portions Hermes uses today.
-- **Block reward** — accumulates into a per-delegate pending pool during the epoch and is distributed together with the epoch reward at the epoch's last block, using the block-stream commission rate.
-- **Epoch reward** — split with voters directly inside `GrantEpochReward()` using the epoch-stream commission rate.
-- **Compound** — for each voter share, the protocol consults `AutoDeposit`: if the voter is registered and their target native bucket satisfies `Owner == voter && AutoStake && status == active`, the share is reinvested via `AddDeposit`; otherwise it is credited to the voter's unclaimed balance for pull-claim via `ClaimFromRewardingFund`.
-- **Opt-in migration** — a new per-delegate on-chain flag (`VoterRewardOnchainOptIn`) gates all of the above. Delegates that do not opt in retain the exact legacy behavior (full stream credited to `RewardAddress`; off-chain Hermes continues to run for them). Hermes is deprecated only after all delegates opt in.
+The pipeline splits work across three time scales:
 
-Because IIP-59 reads the same two contracts Hermes reads and applies the same math, voter net income matches (and slightly exceeds, due to zero service fees) the Hermes era at the same rate. Per-voter events are emitted once per delegate as a batched `DelegateDistributed` log to keep receipt size bounded at the epoch's last block.
+- **Every block** — for opted-in producers, the base block reward is split
+  into commission (immediate to `RewardAddress`) and voter share (credited to
+  the delegate's pending block-reward pool). Non-opted-in delegates retain
+  the legacy full-credit path.
+- **Every epoch boundary (Phase A)** — the epoch reward is split per delegate.
+  Commission is paid immediately; the voter share is added to the pool. A
+  **frozen** work list of `(candidate, voter-total)` pairs is written into
+  a persistent cursor.
+- **Every non-epoch-boundary block until the pool drains (Phase B)** — the
+  system action `GrantVoterRewardChunk` walks the cursor, paying up to
+  `VoterBudgetPerBlock` voters per block, emitting one `DelegateDistributed`
+  log per chunk, and advancing the cursor. Once all delegates in the frozen
+  list are paid, the cursor is deleted.
+
+A reward *era* is a run of `EpochsPerRewardEra` (default 24) epochs. Voter
+distribution occurs at *era boundaries*, but blocks in between still emit
+per-block commission and accrue their voter share into the pool, so a voter's
+per-era share is the sum of one epoch grant plus (era length) blocks of
+block-reward voter share. `snap.Entries` — the frozen voter weight list — is
+computed at era-boundary `PutPollResult` (IIP-58 snapshot) and is byte-stable
+for the entire drain, guaranteeing deterministic replay across chunks.
+
+Because voter payouts are bounded per block, the protocol can safely support
+delegates with up to 30 000 voters without any single block exceeding the
+2.5 s consensus budget. When configured capacity is exceeded, the protocol
+degrades gracefully: any voter share that could not drain before the next
+era boundary is rolled into that era's pool rather than being dropped.
 
 ## Motivation
 
-### The Hermes Problem
+### The Hermes problem
 
 Hermes is a centralized Go service (last updated 2022) that:
 
-1. Claims epoch rewards on behalf of delegates
-2. Queries an external GraphQL analytics endpoint for voter-to-delegate mappings
-3. Calculates each voter's share off-chain
-4. Sends batch transfers via a MultiSend smart contract
+1. Runs a private key that must be authorized as `RewardAddress` for every
+   opted-in delegate.
+2. Reads `DelegateProfile` for per-stream commission rates.
+3. Reads `AutoDeposit` for per-voter compound preferences.
+4. Reads on-chain staking state to compute weighted voter shares.
+5. Submits `ClaimFromRewardingFund` on behalf of delegates, then batches
+   transfers to voters (or `AddDeposit` calls for compound targets).
+6. Charges a service fee per distribution.
 
-This architecture has critical problems:
+Failure modes today:
 
-| Problem | Impact |
-|---------|--------|
-| **Single point of failure** | Service downtime = voters don't get paid |
-| **Centralized key custody** | Distributor private key is a security/trust risk |
-| **External data dependency** | GraphQL analytics endpoint can go down or return stale data |
-| **No verifiability** | Voters must trust Hermes to compute shares correctly |
-| **Gas inefficiency** | Iterates over all voters every epoch via EVM MultiSend |
-| **Stale codebase** | Go 1.11, no maintenance since 2022, hardcoded address patches |
-| **Service fees** | BASE_CHARGE + per-voter fees extracted from rewards |
+- **Central point of failure**: a Hermes outage delays voter payouts by
+  hours to days; there is no consensus-level guarantee.
+- **Off-chain trust**: the split math is not consensus-verified. Auditing
+  requires a bespoke tool that recomputes what Hermes did.
+- **Fee overhead**: distributing rewards costs voters approximately 5 % of
+  gross income.
+- **Operational drift**: as of 2022 no external contributor understands
+  Hermes end-to-end; a rewrite is more risky than a protocol-side re-fold.
 
-### Why Protocol-Native
+### Design constraints
 
-All data needed for voter reward distribution already exists in the protocol's on-chain state:
+The v3 design reflects four hard constraints that emerged during 5.5a/5.5b
+implementation:
 
-- **Voter-to-delegate mappings**: `VoteBucket.CandidateAddress` in the staking protocol
-- **Vote weights**: `CalculateVoteWeight()` using staked amount, duration, and auto-stake flag
-- **Epoch rewards**: Calculated by `GrantEpochReward()` in the rewarding protocol
-- **Reward accounts**: Per-address unclaimed balance in the rewarding fund
+1. **Determinism.** All state that changes during voter payout must be
+   recomputable byte-identically from `(SnapshotHash, cursor state,
+   snap.Entries)`. This is why voter weights are frozen at era boundary
+   and never re-read mid-era.
 
-The only missing piece is the distribution logic — a straightforward extension of the existing `GrantEpochReward()` function.
+2. **Bounded block work.** A single block must never process more than
+   `VoterBudgetPerBlock` voter payments (default 2000) or
+   `CompoundBatchSize` delegate credits (default 500), whichever hits
+   first. Both are genesis-config values gated on the feature fork.
 
-### Why Not a Smart Contract
+3. **Per-item degrade over halt.** When a per-delegate operation fails
+   (bad snapshot, missing candidate, contract revert on compound), the
+   protocol skips that item and continues. The block is never halted.
 
-A contract-based approach (Merkle drop, F1 distribution) was considered but rejected:
+4. **Legacy path preservation until universal opt-in.** Delegates who
+   have not opted in must observe **identical** legacy behavior. The
+   opt-in flag lives on the candidate record; the flag is captured into
+   each era's poll snapshot, so mid-era opt-in changes do not fragment
+   an ongoing distribution.
 
-- **Merkle drop**: Requires an off-chain bot to compute and post roots — still a centralized dependency, just lighter
-- **F1 on-chain**: Gas cost is O(N) per deposit where N = number of voters. Top delegates have 2,000+ voters, requiring 80M+ gas per epoch — exceeds block gas limit
-- **Precompile for staking reads**: Requires protocol change anyway — same effort as native distribution
+## Terminology
 
-Protocol-native distribution costs zero gas (runs in Go inside the block executor), has zero external dependencies, and is as trustless as block rewards.
+| Term | Definition |
+|---|---|
+| **Reward Era** | Run of `EpochsPerRewardEra` (default 24) consecutive epochs. Era `n` covers epochs `[n·24, n·24 + 24)`. |
+| **Era Boundary** | The block that runs the last `PutPollResult` before era `n` begins — i.e., the last block of epoch `n·24 - 1`. This is where `snap.Entries` is frozen. |
+| **Phase A** | `GrantEpochReward` execution at every epoch boundary block. Pays commission, updates fund, credits voter share to per-delegate pool, materializes cursor. |
+| **Phase B** | `GrantVoterRewardChunk` execution at each non-epoch-boundary block while a cursor is live. Drains voter share from the pool to voters via inline compound/credit routing. |
+| **Pending Block Reward Pool** | Per-delegate `*big.Int` state under `state.RewardingNamespace`, keyed by candidate identifier. Accumulates voter share from block rewards + epoch reward until drained by Phase B. |
+| **Cursor** | Serialized `EpochDrainCursor` message stored in `state.RewardingNamespace`. Tracks `(TargetEra, DelegateIndex, VoterIndex, Delegates[])` between blocks. |
+| **`snap.Entries`** | `[]CandidatePollSnapshotEntry`, one per voter, each `{Voter, Weight}`. Frozen at era boundary by `FreezePollSnapshot`. Immutable across the drain. |
+| **DelegateProfile** | Existing on-chain contract; source of truth for per-delegate commission rates (block stream and epoch stream). |
+| **AutoDeposit** | Existing on-chain contract; source of truth for per-voter compound preference (bucket ID). |
+| **Opt-in** | Boolean flag on `Candidate`, `VoterRewardOnchainOptIn`. When true, IIP-59 distribution runs for that delegate; when false, all legacy paths are preserved. |
 
 ## Specification
 
-### 0. Architecture Overview
+### §1 Overview
 
-The design reuses two existing EVM contracts (`DelegateProfile`, `AutoDeposit`) as the operator-facing configuration surface, freezes their values into a per-epoch poll snapshot, and consumes that snapshot from the rewarding protocol. Off-chain Hermes v1 continues to serve delegates that have not opted in.
+The protocol pipeline is:
 
-```mermaid
-flowchart TB
-    classDef actor fill:#fff,stroke:#333,color:#000
-    classDef contract fill:#e3f2fd,stroke:#1976d2,color:#000
-    classDef state fill:#fff3e0,stroke:#f57c00,color:#000
-    classDef process fill:#e8f5e9,stroke:#388e3c,color:#000
-    classDef offchain fill:#fce4ec,stroke:#c2185b,color:#000
+```
+Every block:
+  GrantBlockReward
+    ├─ producer opted-in? split (commission, voterShare) via snap.BlockCommissionBasisPoints
+    │  ├─ commission → RewardAddress (immediate)
+    │  └─ voterShare → per-delegate pending block-reward pool
+    └─ producer not opted-in? legacy: full amount → RewardAddress
 
-    Del(["Delegate"]):::actor
-    Voter(["Voter"]):::actor
+Era-boundary block (also epoch-boundary):
+  PutPollResult  → FreezePollSnapshot(era) → snap.Entries
+  GrantEpochReward (Phase A)
+    ├─ for each delegate:
+    │  ├─ splitDelegateEpochReward → (commission, voterShare) via snap.EpochCommissionBasisPoints
+    │  ├─ commission → grantToAccount(RewardAddress)   (EPOCH_REWARD log)
+    │  └─ voterShare → creditPendingBlockRewardPool(candID)
+    ├─ if any delegate has pool > 0: append to cursor.Delegates
+    └─ persist cursor if len(Delegates) > 0
 
-    subgraph contracts["Reused EVM Contracts (existing, operator-facing)"]
-        direction LR
-        Profile["<b>DelegateProfile</b><br/>portion → invert → commission<br/><i>rate source</i>"]:::contract
-        AutoDep["<b>AutoDeposit</b><br/>bucket lookup + AddDeposit<br/><i>compound source</i>"]:::contract
-    end
-
-    subgraph staking["staking.Protocol"]
-        CandState["<b>state.Candidate</b> (extended)<br/>+ VoterRewardOnchainOptIn<br/>+ BlockCommissionRate<br/>+ EpochCommissionRate"]:::state
-        VWView["<b>VoterWeightView</b><br/>incremental per-delegate<br/>sorted voter weights"]:::state
-    end
-
-    subgraph poll["poll.Protocol — PutPollResult (epoch boundary)"]
-        direction TB
-        SnapProc["SnapshotCommissionRates +<br/>SnapshotVoterWeights +<br/>SnapshotOptIn"]:::process
-        PollSnap["<b>PollSnapshot</b> (frozen, per epoch)<br/>{ optIn, blockCommRate,<br/>epochCommRate, voterWeights }"]:::state
-    end
-
-    subgraph rewarding["rewarding.Protocol"]
-        direction TB
-        GBR{"<b>GrantBlockReward</b><br/>opt-in eligible?"}:::process
-        Pool["<b>PendingBlockRewardPool</b><br/>{ delegate → amount,<br/>frozen blockCommRate }"]:::state
-        GER["<b>GrantEpochReward</b><br/>drain pool + fold epoch reward<br/>→ distributeToVoters"]:::process
-    end
-
-    Unclaimed["Voter<br/>unclaimedBalance"]:::state
-    DelReward["Delegate<br/>RewardAddress"]:::state
-    Hermes["<b>Hermes v1 Service</b><br/>opt-out delegates only<br/>(off-chain, unchanged)"]:::offchain
-
-    Del -->|"setProfile<br/>(unchanged UX)"| Profile
-    Del -->|"SetVoterRewardOptIn<br/>(new action)"| CandState
-    Voter -->|"register bucket<br/>(unchanged UX)"| AutoDep
-    Voter -->|"stake / unstake<br/>events"| VWView
-
-    CandState -.->|"read"| SnapProc
-    Profile -.->|"getEncodedProfile"| SnapProc
-    VWView -.->|"read"| SnapProc
-    SnapProc --> PollSnap
-
-    PollSnap -.->|"per-block: optIn<br/>+ blockCommRate"| GBR
-    GBR -->|"yes: base reward"| Pool
-    GBR -->|"tip (always)"| DelReward
-    GBR -->|"no / ineligible:<br/>full amount"| DelReward
-
-    Pool --> GER
-    PollSnap -.->|"weights + rates"| GER
-
-    GER -->|"per voter share:<br/>active bucket?"| AutoDep
-    AutoDep -->|"AddDeposit → voter bucket"| Voter
-    GER -->|"else: voter share"| Unclaimed
-    GER -->|"commission"| DelReward
-    GER -.->|"opt-out delegates:<br/>full epoch amount"| DelReward
-
-    DelReward -.->|"scans opt-out delegates only"| Hermes
-    Hermes -.->|"legacy off-chain split"| Unclaimed
-    Voter -->|"ClaimFromRewardingFund<br/>(unchanged action)"| Unclaimed
+Non-era-boundary block (cursor live):
+  CreatePostSystemActions emits GrantVoterRewardChunk
+  GrantVoterRewardChunk (Phase B)
+    ├─ delegateBudget = CompoundBatchSize
+    ├─ voterBudget    = VoterBudgetPerBlock
+    ├─ walk cursor.Delegates from cursor.DelegateIndex
+    ├─ for each delegate:
+    │  ├─ snap = load frozen entries
+    │  ├─ startVoter = cursor.VoterIndex; endVoter = min(startVoter+voterBudget, len(snap.Entries))
+    │  ├─ distributeVoterOnly(startVoter, endVoter)
+    │  ├─ emit DelegateDistributed (window subset)
+    │  ├─ decrement pending pool by window amount
+    │  └─ advance cursor: paidLast ? (DelegateIndex++, VoterIndex=0) : VoterIndex=endVoter
+    └─ if all drained: delete cursor
 ```
 
-**Reading guide.** Solid arrows are on-chain writes/transfers; dashed arrows are reads (snapshotting, off-chain observation). The three colored bands map to §1–§2 (staking state), §3.4 (poll snapshot), and §3.1–§3.7 (rewarding protocol). §3.5 covers the `DelegateProfile` read, §3.6 the `AutoDeposit` compound routing, and §3.7 the opt-in gate that partitions traffic between the on-chain path and Hermes v1.
+The rest of this specification defines each step.
 
-**Key design invariants** enforced by the diagram:
+### §2 Candidate Opt-In
 
-1. **Rates and opt-in are read once per epoch**, at `PutPollResult`, and frozen. `GrantBlockReward` and `GrantEpochReward` never re-read the contract or the live candidate — they only consume the snapshot. Guarantees deterministic replay under Fork/Snapshot/Revert.
-2. **Block reward tips (`effectiveTip`) always go to the producer directly**, regardless of opt-in state. Only the base block reward is subject to the split.
-3. **`AutoDeposit` is queried per voter at drain time**, not snapshotted. Compound preference is an at-source decision by the voter and does not affect consensus math — a failed contract call falls through to `unclaimedBalance` (see §3.6).
-4. **Off-chain Hermes MUST filter opted-in delegates** at the same snapshot boundary, else voters are double-paid. See Security Considerations for the coexistence protocol.
+#### 2.1 Candidate fields
 
-### 1. Candidate Registration Extension
+The `staking.Candidate` protobuf gains three fields:
 
-Add three fields to the `Candidate` struct in the staking protocol. Two carry the commission rates read from `DelegateProfile` (see §3.5); one is the opt-in gate (see §3.7):
-
-```go
-type Candidate struct {
-    Owner                    address.Address
-    Operator                 address.Address
-    Reward                   address.Address
-    Identifier               address.Address
-    Name                     string
-    Votes                    *big.Int
-    SelfStakeBucketIdx       uint64
-    SelfStake                *big.Int
-    BLSPubKey                []byte
-    VoterRewardOnchainOptIn  bool    // NEW: gate — false = legacy Hermes-era behavior
-    BlockCommissionRate      uint64  // NEW: basis points (0–10000), block-stream commission
-    EpochCommissionRate      uint64  // NEW: basis points (0–10000), epoch-stream commission
+```proto
+message Candidate {
+  // ... existing fields ...
+  bool     voterRewardOnchainOptIn        = 11;
+  uint64   blockCommissionBasisPoints     = 12;
+  uint64   epochCommissionBasisPoints     = 13;
 }
 ```
 
-**Field semantics:**
+- `voterRewardOnchainOptIn` — false by default. Controls whether IIP-59
+  distribution runs for this delegate.
+- `blockCommissionBasisPoints` — basis-point (bps) commission on block
+  reward, 0–10 000. Default 0 (all to voters, but only if opted-in).
+- `epochCommissionBasisPoints` — bps commission on epoch reward, 0–10 000.
+  Default 0.
 
-- `VoterRewardOnchainOptIn = false` (default): Legacy behavior — full block reward and full epoch reward go to the delegate's `Reward` account (`RewardAddress`). Off-chain Hermes continues to distribute for this delegate. `BlockCommissionRate` / `EpochCommissionRate` are ignored.
-- `VoterRewardOnchainOptIn = true`: Protocol auto-distributes at epoch end (block reward is folded — see §3.1). The delegate receives `BlockCommissionRate / 10000` of accumulated block reward and `EpochCommissionRate / 10000` of epoch reward; each stream's remainder is distributed to voters proportional to weighted votes.
-- Maximum commission value: `10000` (100% — delegate keeps everything, voters get nothing).
-- Both rate fields are **populated by the poll layer at `PutPollResult`** from the `DelegateProfile` contract (§3.5). They are not settable by any protocol action. `VoterRewardOnchainOptIn` is likewise snapshotted at `PutPollResult` from the delegate's live opt-in state (§3.7).
+Two independent rates match the two streams Hermes reads today. Prior to
+this proposal, `CommissionRate` was a single rate applied at claim time by
+Hermes across both streams.
 
-Because the rates are contract-sourced, no `SetCommissionRate` action is added; the existing Hermes-era operator UX for setting rates in `DelegateProfile` is preserved.
+#### 2.2 `SetVoterRewardOptIn` action
 
-### 2. New Action: `SetVoterRewardOptIn`
+A new transaction type is added:
 
-A single new protocol action lets a delegate opt into (or out of) protocol-native distribution:
-
-```go
-type SetVoterRewardOptIn struct {
-    OptIn bool
+```proto
+message SetVoterRewardOptIn {
+  bytes  candidate_identifier = 1;
+  bool   opt_in               = 2;
+  uint64 block_commission_bps = 3;
+  uint64 epoch_commission_bps = 4;
 }
 ```
 
-**Constraints:**
-- Only the candidate's `Owner` address can call this action.
-- Takes effect at the **next epoch boundary** — the flag is copied into the poll snapshot at the next `PutPollResult`; the epoch that follows uses the new value (see §3.7).
-- Bidirectional: a delegate can toggle back to the legacy path if operational issues arise. Opt-out drains any accumulated block-reward pool at the next epoch end using the flag value that was live for the block that was produced (see §3.1 / §3.3).
-- Idempotent: calling with the current value is a no-op receipt (does not fail).
-- Gas cost: ~10,000 (single-byte state write plus event emission).
+Semantics:
 
-Rate changes continue to be operated through `DelegateProfile` (unchanged operator UX). This action is only about switching distribution mode.
+- Signer must be the current `Owner` of the candidate identified by
+  `candidate_identifier` (or, post-IIP-58, the delegate profile owner).
+- Sets the three fields on the candidate record.
+- Emits a `VoterRewardOptInChanged` receipt log with the new values.
 
-### 3. Modified Reward Distribution
+Basis-point rates must satisfy `0 ≤ bps ≤ 10 000`. Reverts otherwise.
 
-> **Amendment note (v2, 2026-07).** §§3.2 and 3.4 below describe the *initial* per-epoch distribution cadence. Measured mainnet-scale cost (27,020 distinct voter addresses × ~130μs trie-backed per-voter processing ≈ ~3.4s single-block wall clock) breaches the 2.5s post-Dardanelles block budget. **Section 8 (Amendment v2) supersedes the per-epoch cadence with a per-day era model** while keeping every other §3 mechanism (opt-in gate, contract-rate source, per-delegate pending pool, compound routing, orphan drain) intact. Readers implementing the final protocol should read §8 alongside §3.
+Alternative implementations may fold the same three fields into
+`CandidateUpdate` instead of introducing a distinct action; the choice is
+non-normative and does not affect the reward pipeline.
 
-Both `GrantBlockReward()` and `GrantEpochReward()` are modified so that a delegate with `VoterRewardOnchainOptIn == true` splits **the entire delegate-side reward flow** with voters — matching what Hermes distributed prior to this proposal (delegate's full unclaimed balance).
+#### 2.3 Snapshot capture
 
-Because per-voter distribution is O(voters) work — expensive at 2,000+ voters — the protocol runs it only once per **era** (see §8; originally: once per epoch, at the epoch's last block). Block rewards accumulate into a per-delegate pending pool between distribution boundaries and are folded into the single distribution call at the boundary. This keeps per-block cost at O(1) while preserving voter economics.
+At every `PutPollResult` (called per epoch), the current candidate list is
+enumerated and, for each candidate, `voterRewardOnchainOptIn`,
+`blockCommissionBasisPoints`, `epochCommissionBasisPoints`, and
+`Registered` are copied into the poll snapshot under
+`state.StakingNamespace`. This is the only place these fields are read from
+the mutable candidate record; all downstream reward logic reads the frozen
+snapshot.
 
-The eligibility predicate `blockRewardEligibleForVoterSplit(fCtx, cand)` guards both `GrantBlockReward` routing and the epoch-end drain path (see §3.7). It returns true iff the fork is active, the candidate exists in the poll snapshot, `cand.VoterRewardOnchainOptIn` is true, and at least one of `BlockCommissionRate` / `EpochCommissionRate` is set. Delegates that fail the predicate follow the legacy path in full.
+Mid-epoch opt-in toggles take effect **the epoch after next**: an opt-in
+transaction landing in epoch `N` is captured into the snapshot at the start
+of epoch `N+1` and applied to the epoch reward at the end of epoch `N+1`.
 
-#### 3.1 Block Reward Accumulation
+### §3 Block-Reward Distribution (per block)
 
-`GrantBlockReward()` (currently: credit the block reward directly to the block producer's reward account) is modified:
+At every block, `GrantBlockReward` is called by the protocol runtime for the
+block producer.
 
-```go
-func (p *Protocol) GrantBlockReward(ctx context.Context, sm protocol.StateManager) (*action.Log, error) {
-    // ... existing: resolve producer → candidate, calculate blockReward, effectiveTip ...
+#### 3.1 Fund flow (opted-in producer)
 
-    if p.blockRewardEligibleForVoterSplit(featureCtx, delegate) {
-        // Priority tip stays with the producer directly — tips are inclusion
-        // incentive for the block builder, not delegate compensation.
-        if effectiveTip.Sign() > 0 {
-            if err := p.creditRewardAccount(sm, delegate.Reward, effectiveTip); err != nil {
-                return nil, err
-            }
-        }
-        // Accumulate the base block reward to the per-delegate pending pool;
-        // do NOT credit the delegate's reward account yet. The pool drains at
-        // epoch end.
-        return p.addPendingBlockReward(sm, delegate.Identifier, blockReward)
+```
+totalBlockReward = adm.BlockReward
+snap = staking.PollSnapshotFor(producer)
+if snap != nil && snap.VoterRewardOnchainOptIn && snap.Registered:
+    (commission, voterShare) = splitCommission(totalBlockReward, snap.BlockCommissionBasisPoints)
+    fund.unclaimedBalance -= totalBlockReward
+    account(rewardAddr).unclaimedBalance += commission
+    pool(candidateIdentifier).credit(voterShare)
+    emit BLOCK_REWARD (commission)   // legacy log format preserved for commission
+    emit PENDING_POOL_CREDIT (voterShare, candidateIdentifier)  // new
+else:
+    // legacy path
+    fund.unclaimedBalance -= totalBlockReward
+    account(rewardAddr).unclaimedBalance += totalBlockReward
+    emit BLOCK_REWARD (totalBlockReward)
+```
+
+#### 3.2 `splitCommission`
+
+```
+splitCommission(amount, bps) -> (commission, voterShare):
+    commission  = amount * bps / 10_000       // integer floor division
+    voterShare  = amount - commission
+    return (commission, voterShare)
+```
+
+Dust from the floor division stays with the voter share (never with
+commission), preserving the "voters at least break even against a
+zero-fee Hermes" property.
+
+#### 3.3 Pending block reward pool
+
+Per-delegate state under `state.RewardingNamespace`, keyed by
+`candidateIdentifier`. Supports:
+
+- `credit(amount)` — additive; increments `unclaimed`.
+- `decrement(amount)` — clamped to `unclaimed ≥ 0`. Used by Phase B when
+  paying voters.
+- `readTotal()` — used by Phase A when materializing the cursor.
+
+The pool exists purely as an accounting sink. Its balance is a subset of
+`fund.totalBalance` and never overpays; `Claim` cannot see this pool.
+
+Pre-fork (`NoVoterRewardDistribution == true`), the pool code paths are
+skipped; block reward goes entirely to `rewardAddr` per legacy.
+
+### §4 Poll-Snapshot Freezing (era boundary)
+
+#### 4.1 Era boundary predicate
+
+```
+IsEraBoundary(epochNum, epochsPerEra):
+    return epochNum > 0 && (epochNum % epochsPerEra) == 0
+```
+
+The block that runs `PutPollResult` at the start of an era-boundary epoch
+is the block that freezes the snapshot for the era that just ended.
+
+#### 4.2 `FreezePollSnapshot`
+
+Introduced in IIP-58 and extended by this proposal. Called from
+`PutPollResult` when `IsEraBoundary` is true. Enumerates the candidate
+list, and for each opted-in registered candidate:
+
+- Reads the live `VoterWeightView` (per-delegate sorted voter weights).
+- Materializes `[]CandidatePollSnapshotEntry` from the view.
+- Serializes into the snapshot blob keyed by `candidateIdentifier`.
+
+Non-opted-in candidates skip entry materialization; the snapshot still
+carries their `VoterRewardOnchainOptIn=false` flag so downstream logic
+can short-circuit correctly.
+
+#### 4.3 `snap.Entries` layout
+
+```proto
+message CandidatePollSnapshotEntry {
+  bytes voter  = 1;    // 20-byte address
+  bytes weight = 2;    // big.Int serialized
+}
+
+message CandidatePollSnapshot {
+  // ... commission bps, opt-in flag, registered flag ...
+  repeated CandidatePollSnapshotEntry entries = 5;
+  hash256 snapshot_hash                      = 6;
+}
+```
+
+`entries` is sorted by `weight` descending, then by `voter` ascending as
+tiebreaker, then trimmed to a chain-configured limit (currently
+unlimited; the 30 000-voter design ceiling is an operational cap, not a
+consensus cap).
+
+`snapshot_hash` is `Keccak256(SerializeDeterministic(entries))` and is
+emitted in every `DelegateDistributed` log so off-chain consumers can
+reassemble partial chunks by `(SnapshotHash, delegate, epoch)`.
+
+The snapshot is loaded via `staking.PollSnapshotFor(candID)`. It lives in
+staking's namespace, not rewarding's, because staking is the ownership
+domain.
+
+### §5 Epoch-Reward Distribution — Phase A
+
+#### 5.1 Trigger
+
+`GrantEpochReward` is a protocol-generated system action at every epoch's
+final block. Pre-fork behavior is preserved (single fund-decrement, no
+per-delegate loop). Post-fork behavior is described here.
+
+#### 5.2 Guard: cursor must not be live
+
+The first check in Phase A (post-fork) reads the persisted cursor:
+
+```
+if !featureCtx.NoVoterRewardDistribution:
+    existing = readEpochDrainCursor()
+    if existing != nil:
+        // cursor from the previous era failed to drain in time
+        goto §10.2 (graceful degrade)
+```
+
+This is the only place where the "cursor pile-up" degrade path can enter;
+see §10.2 for its semantics.
+
+#### 5.3 Per-delegate loop
+
+```
+foundationBonusRecipients = pollForFoundationBonus()
+epochAmt = adm.EpochReward
+foreach delegate in activeDelegates:
+    epochAmtForThisDelegate = split(epochAmt, votes[delegate])
+    (commission, voterShare) = splitDelegateEpochReward(delegate, epochAmtForThisDelegate)
+
+    grantToAccount(delegate.RewardAddress, commission)
+    emit EPOCH_REWARD (commission)                     // legacy log preserved
+
+    if voterShare.Sign() > 0:
+        pool(candID).credit(voterShare)
+        emit PENDING_POOL_CREDIT (voterShare, candID)  // new
+```
+
+`splitDelegateEpochReward` returns `(amount, 0)` for non-opted-in delegates
+(legacy path: commission absorbs the whole share).
+
+#### 5.4 Cursor materialization
+
+After the per-delegate loop:
+
+```
+cursorEntries = []
+foreach delegate in activeDelegates:
+    total = pool(candID).readTotal()
+    if total.Sign() > 0:
+        cursorEntries.append({CandidateIdentifier: candID, VoterAmountFrozen: total})
+
+if len(cursorEntries) > 0:
+    cursor = EpochDrainCursor{
+        TargetEra:     currentEra,
+        DelegateIndex: 0,
+        VoterIndex:    0,
+        Delegates:     cursorEntries,
     }
-
-    // Legacy: credit total block reward (base + tip) to delegate's reward
-    // account immediately. Off-chain Hermes will pick it up as before.
-    return p.creditRewardAccount(sm, delegate.Reward, totalReward)
-}
+    writeEpochDrainCursor(cursor)
 ```
 
-**Pending pool storage.** A new per-delegate state key:
+The `VoterAmountFrozen` value is the pool total **at the moment Phase A
+completes**. It captures block-reward accrual from the entire prior era
+plus this epoch's voter share. It is used to allocate per-voter shares
+(§6.5) but is **not** re-read from the pool during drain; the pool is
+only decremented.
 
-- Namespace: staking protocol
-- Key: `pendingBlockReward || delegateIdentifier` (21 bytes; `delegateIdentifier` is the 20-byte candidate identifier address)
-- Value: proto blob carrying `{amount *big.Int, rewardAddr address.Address, blockCommissionRate uint64}` captured at first credit; overwritten in place; deleted when drained. Freezing `rewardAddr` and `blockCommissionRate` on the pool entry lets the epoch-end drain do the split correctly even if the delegate exited the top-N mid-epoch and no longer has a fresh poll snapshot (see §3.3).
+#### 5.5 Foundation bonus and slashing
 
-**Properties.**
-- Each block does at most one state read + one state write to the pending pool. No per-voter work at block time.
-- A delegate that produces blocks but exits the top-N before epoch end still has an entry in the pending pool. It is drained at epoch end (see §3.3).
-- Rate changes mid-epoch have no effect on already-accumulated block rewards: the block-stream rate applied at drain time is the one that was frozen into the pool entry on the first credit (or refreshed from the current poll snapshot when the delegate is still in top-N — see §3.3). Both variants read the `PutPollResult`-anchored value, never a live contract state.
-- An opt-in state change mid-epoch is likewise frozen: `blockRewardEligibleForVoterSplit` reads the opt-in flag from the poll snapshot (§3.7), which is only updated at `PutPollResult`.
+Foundation-bonus grants and unproductive-delegate slashing are unchanged
+from the legacy epoch grant; they run in the same `GrantEpochReward` call
+before or after the per-delegate loop and emit their existing log formats.
+Neither interacts with the pending pool.
 
-#### 3.2 Epoch Reward Split
+### §6 Voter-Reward Chunk Distribution — Phase B
 
-`GrantEpochReward()` is modified so each stream is split with voters using its own commission rate when the delegate is opted in. Streams are split independently to preserve the two-rate semantics inherited from the `DelegateProfile` contract (see §3.5), then commissions and voter shares are aggregated before crediting:
+#### 6.1 System action
+
+A new action type, `GrantVoterRewardChunk`, is a protocol-generated
+system action with no user-visible parameters. Handler:
 
 ```go
-// per-delegate loop inside GrantEpochReward
-for _, delegate := range topDelegates {
-    epochReward := calculateDelegateReward(delegate, totalVotes)
-
-    // Fold in this delegate's accumulated block rewards.
-    pending := p.drainPendingBlockReward(sm, delegate.Identifier)
-
-    if p.blockRewardEligibleForVoterSplit(featureCtx, delegate) {
-        // Split each stream independently, then aggregate.
-        //   block-stream commission uses BlockCommissionRate
-        //   epoch-stream commission uses EpochCommissionRate
-        blockCommission := split(pending, delegate.BlockCommissionRate)
-        epochCommission := split(epochReward, delegate.EpochCommissionRate)
-        totalCommission := new(big.Int).Add(blockCommission, epochCommission)
-        voterPool := new(big.Int).Sub(
-            new(big.Int).Add(pending, epochReward),
-            totalCommission,
-        )
-
-        rewardLogs, err := p.distributeToVoters(ctx, sm, delegate, totalCommission, voterPool)
-        if err != nil { return nil, err }
-        logs = append(logs, rewardLogs...)
-    } else {
-        // Legacy behavior: full combined reward to delegate.
-        p.creditRewardAccount(sm, delegate.Reward, new(big.Int).Add(pending, epochReward))
-    }
-}
+func (p *Protocol) GrantVoterRewardChunk(
+    ctx context.Context,
+    sm protocol.StateManager,
+) ([]*action.TransactionLog, []*action.Log, error)
 ```
 
-`distributeToVoters` reads the voter list from the frozen snapshot (§3.4), routes each voter's share to either the compound path (§3.6) or the unclaimed balance, aggregates per-voter allocations, and emits a **single batched log per delegate** (see next paragraph). Delegate commission is credited to `delegate.Reward` in one write.
+Emits transaction logs (voter credits / autodeposit calls) and event logs
+(one `DelegateDistributed` per delegate chunk in this call).
 
-**Batched receipt log.** Emitting one log per voter is prohibitively expensive at the epoch's last block — under load (top ~100 delegates × 2,000+ voters each) receipt trie growth and `eth_getLogs` on the epoch block become bottlenecks. Instead, one `DelegateDistributed` log is emitted per delegate:
+#### 6.2 Emission rule
+
+`CreatePostSystemActions` — called by the block producer during
+`PutBlock` — appends a `VoterRewardChunk` grant iff:
+
+```
+!featureCtx.NoVoterRewardDistribution
+&& !IsEpochBoundaryBlock(blockHeight)
+&& readEpochDrainCursor() != nil
+```
+
+The epoch-boundary block runs Phase A, not Phase B, even if the previous
+era's cursor is still live (in which case §10.2 applies). Blocks on
+which the cursor is nil emit nothing.
+
+#### 6.3 Cursor advance semantics
+
+```
+delegateBudget = p.epochDrainChunkSize(ctx)   // 0 pre-fork; else CompoundBatchSize
+voterBudget    = p.voterBudgetPerBlock(ctx)   // 0 pre-fork; else VoterBudgetPerBlock
+
+remainingDelegates = delegateBudget
+remainingVoters    = voterBudget
+
+for i := cursor.DelegateIndex; i < len(cursor.Delegates); i++:
+    work = cursor.Delegates[i]
+    snap = staking.PollSnapshotFor(work.CandidateIdentifier)
+
+    startVoter = cursor.VoterIndex
+    total      = uint32(len(snap.Entries))
+    endVoter   = total
+    if voterBudget > 0 && startVoter+remainingVoters < total:
+        endVoter = startVoter + remainingVoters
+
+    (logs, paidLast, paidAmount) = distributeVoterOnly(
+        work.CandidateIdentifier,
+        snap,
+        work.VoterAmountFrozen,       // full frozen amount, for share allocation
+        startVoter, endVoter,         // payment window
+    )
+    decrementPendingBlockRewardPool(candID, paidAmount)
+
+    if paidLast:
+        cursor.DelegateIndex = i + 1
+        cursor.VoterIndex    = 0
+        if voterBudget > 0:
+            remainingVoters -= (endVoter - startVoter)
+        if delegateBudget > 0:
+            remainingDelegates -= 1
+            if remainingDelegates == 0: break
+    else:
+        // Mid-delegate stop — persist window advance, stop iteration
+        cursor.VoterIndex = endVoter
+        break
+
+    if voterBudget > 0 && remainingVoters == 0: break
+
+if cursor.DelegateIndex == len(cursor.Delegates):
+    deleteEpochDrainCursor()
+else:
+    writeEpochDrainCursor(cursor)
+```
+
+`voterBudget == 0` means "unbounded"; `delegateBudget == 0` means the
+same. Pre-fork both return 0, which produces a single-block drain
+identical to the legacy path (which itself would have already run inside
+`GrantEpochReward`).
+
+Cursor deletion is the completion signal. The next block's
+`CreatePostSystemActions` observes `cursor == nil` and stops emitting
+`GrantVoterRewardChunk`.
+
+#### 6.4 Window sizing
+
+- `VoterBudgetPerBlock` (default 2000) — maximum voter payments per
+  block. Sized to keep single-block work under ~500 ms of the 2.5 s
+  block budget on reference hardware.
+- `CompoundBatchSize` (default 500) — maximum distinct delegate chunks
+  per block. Prevents pathological cases where thousands of tiny
+  delegates each contribute one voter and per-delegate fixed overhead
+  dominates.
+
+Either cap can end a chunk. When one cap is hit, remaining work
+carries forward via the cursor.
+
+Both caps read from `genesis.Rewarding` and are gated behind
+`NoVoterRewardDistribution` (§12). A value of 0 for either cap means
+"disabled" and reproduces pre-5.5 behavior for that dimension.
+
+#### 6.5 `distributeVoterOnly` — windowed payout
+
+```go
+func (p *Protocol) distributeVoterOnly(
+    ctx    context.Context,
+    sm     protocol.StateManager,
+    candID []byte,
+    snap   *CandidatePollSnapshot,
+    frozenVoterAmount *big.Int,     // full pool total for allocation
+    startVoter, endVoter uint32,    // payment window
+) (logs []*action.Log, paidLast bool, paidAmount *big.Int, err error)
+```
+
+Behavior:
+
+1. **Allocate over the full list.** Compute per-voter shares by weight:
+   ```
+   totalWeight = sum(snap.Entries[j].weight for j in [0, N))
+   share[j]    = frozenVoterAmount * entries[j].weight / totalWeight
+   ```
+   Dust from truncation is added to the last positive-weight entry.
+   This allocation is O(N) per chunk but is deterministic and identical
+   across all chunks of the same delegate — a delegate split into K
+   chunks yields byte-identical per-voter amounts to a single-chunk run.
+
+2. **Pay the window.** For each `j ∈ [startVoter, endVoter)`:
+   - Read `AutoDeposit(voter[j])` from the AutoDeposit contract.
+     - If the voter has a registered bucket AND
+       `bucket.Owner == voter[j] && bucket.AutoStake && bucket.Status == active`,
+       call `bucket.AddDeposit(share[j])` — this is the "compound"
+       route; append a `Route{voter, bucketID, share, kind=Compound}`
+       to the chunk's routing list.
+     - Otherwise, credit `share[j]` to
+       `account(voter[j]).unclaimedBalance`; append
+       `Route{voter, 0, share, kind=Credit}`.
+   - Failures on individual voters (contract revert, bucket state
+     race) fall through to the Credit route (per-item degrade,
+     §10.1) and are logged as a warn event; the chunk is not aborted.
+
+3. **Return.**
+   - `paidLast = (endVoter == len(snap.Entries))`.
+   - `paidAmount = sum(share[startVoter], share[startVoter+1], ..., share[endVoter-1])`.
+   - `logs` includes the `DelegateDistributed` log for this chunk (§7).
+
+### §7 `DelegateDistributed` Log
+
+#### 7.1 Emission
+
+Emitted once per delegate chunk inside `distributeVoterOnly`. A delegate
+split across three chunks yields three `DelegateDistributed` logs, all
+with identical `SnapshotHash`.
+
+#### 7.2 Fields
 
 ```
 event DelegateDistributed(
     uint64  indexed epoch,
-    address indexed delegate,       // candidate identifier
-    address         rewardAddr,     // where commission was credited
+    address indexed delegate,
+    address         rewardAddr,
     uint256         totalCommission,
     uint256         totalVoterPool,
-    bytes32         snapshotHash,   // hash of the frozen voter list (§3.4)
-    address[]       voters,         // canonical sorted order, matches snapshot
-    uint256[]       amounts,        // parallel array
-    uint8[]         routings        // 0 = unclaimed balance, 1 = AutoDeposit compound
-)
-```
+    bytes32         snapshotHash,
+    address[]       voters,
+    uint256[]       amounts,
+    Route[]         routings
+);
 
-- `voters[i]`, `amounts[i]`, and `routings[i]` line up positionally.
-- `snapshotHash` binds the log to the exact snapshot that drove distribution — off-chain reconstructors can verify without replaying state.
-- A single delegate's log carries all their voters; total logs at the epoch's last block is bounded by `|topDelegates| + |orphanDrain|` (roughly ≤200), regardless of voter count.
-
-**Key properties:**
-- Runs inside the protocol (Go code), not the EVM — **zero gas cost** for the split itself. Compound routing incurs one bounded EVM call per **registered** voter (see §3.6); non-registered voters are free.
-- Uses the existing `creditRewardAccount()` to credit each voter's unclaimed balance (non-compound routing).
-- Vote weight calculation uses the same `CalculateVoteWeight()` as consensus — reads via the frozen snapshot (§3.4).
-- Voter iteration is in canonical (sorted-by-address) order.
-- Rounding dust (< 1 Rau per voter) goes to the delegate, added to `totalCommission` after all voters are credited.
-- Only active buckets participate (already enforced at snapshot time — §3.4).
-
-#### 3.3 Draining Pending Pools for Non-Top-N Delegates
-
-A delegate that produced blocks earlier in the epoch but exits the top-N (e.g. lost votes late in the epoch), or that flipped `VoterRewardOnchainOptIn` back to `false` mid-epoch, still has a non-empty pending pool at epoch end. Leaving those funds stranded would silently confiscate block reward.
-
-At the end of `GrantEpochReward()`, after the top-N loop runs, the protocol iterates the pending-pool namespace and drains any remaining entries. Each pool entry carries its own frozen `rewardAddr` and `blockCommissionRate` (captured at first credit), so an orphan drain does not need a fresh poll snapshot for the delegate:
-
-```go
-for _, entry := range p.allPendingBlockRewards(sm) {
-    // Prefer the current poll snapshot if the delegate is still around —
-    // this picks up the fresher opt-in and rate values.
-    delegate, ok := topDelegateByIdentifier[entry.Identifier]
-    if ok {
-        // Already drained inside the top-N loop above; safety net.
-        continue
-    }
-    // Reconstruct a synthetic *state.Candidate from the pool entry itself.
-    syn := &state.Candidate{
-        Identity:            entry.Identifier.String(),
-        RewardAddress:       entry.RewardAddr.String(),
-        BlockCommissionRate: entry.BlockCommissionRate,
-    }
-    if syn.BlockCommissionRate > 0 { // implies opt-in was true when credited
-        p.distributeToVoters(ctx, sm, syn, split(entry.Amount, syn.BlockCommissionRate),
-            new(big.Int).Sub(entry.Amount, split(entry.Amount, syn.BlockCommissionRate)))
-    } else {
-        // Delegate credited pre-fork or opted out before any snapshot; refund
-        // the full pending amount to the frozen reward address.
-        p.creditRewardAccount(sm, entry.RewardAddr, entry.Amount)
-    }
-    p.clearPendingBlockReward(sm, entry.Identifier)
+struct Route {
+    uint8   kind;      // 1 = Compound (AutoDeposit AddDeposit), 2 = Credit
+    uint256 bucketId;  // 0 for Credit
 }
 ```
 
-The pending-pool namespace is bounded by the total registered candidate count (~100), so this is a bounded scan, not O(all keys). If `distributeToVoters` cannot find a voter snapshot for the delegate (delegate never had a snapshot), the full amount degrades to the frozen `rewardAddr` — voters are never stranded.
+- `epoch` — the epoch during which Phase A ran (= the last epoch of the
+  era being distributed).
+- `delegate` — candidate identifier of this chunk.
+- `rewardAddr` — the delegate's reward address at snapshot time.
+- `totalCommission` — the commission amount paid at Phase A. Emitted in
+  every chunk of a delegate for convenience; it is not the sum of any
+  chunk-scoped data.
+- **`totalVoterPool`** — **sum of `amounts[]` in this chunk only.** A
+  delegate split into K chunks emits K `DelegateDistributed` logs whose
+  `totalVoterPool` values sum to `work.VoterAmountFrozen`.
+  Prior to this proposal (v2 amendment), `totalVoterPool` was the full
+  frozen amount emitted once per delegate. Off-chain reassembly by
+  `(SnapshotHash, delegate, epoch)` recovers the equivalent aggregate.
+- `snapshotHash` — Keccak256 of the frozen `snap.Entries`, identical
+  across all chunks of the same delegate.
+- `voters`, `amounts`, `routings` — parallel arrays for the window
+  `[startVoter, endVoter)`.
 
-#### 3.4 Rate, Opt-In, and Voter Weight Snapshotting
+#### 7.3 Reassembly semantics
 
-To guarantee deterministic distribution (and prevent last-block stake manipulation), three per-candidate values are frozen at the **previous** epoch's `PutPollResult` (mid-epoch). Concretely, at `PutPollResult` time the protocol:
+Off-chain consumers must aggregate by `(snapshotHash, delegate, epoch)`:
 
-1. Calls `DelegateProfile.getEncodedProfile(delegate)` via a read-only EVM simulation for each poll candidate; parses the `blockRewardPortion` and `epochRewardPortion` fields (voter-take basis points), **inverts** them (`commission = 10000 - portion`), and writes the result into `BlockCommissionRate` / `EpochCommissionRate` on the poll-snapshotted candidate. Missing profile → both rates set to `0` (see §3.5).
-2. Copies each candidate's current `VoterRewardOnchainOptIn` value into the poll-snapshotted candidate list.
-3. Writes a per-candidate blob of `(voter, weightedVotes)` pairs, sorted by voter address, keyed by candidate identifier.
+- `SUM(totalVoterPool) == work.VoterAmountFrozen` for a fully drained
+  delegate.
+- `CONCAT(voters[])` == first N entries of `snap.Entries.voter`, in
+  order.
+- `CONCAT(amounts[])` == deterministic per-voter allocation over the
+  full frozen list.
 
-`distributeToVoters()` reads the frozen voter list (not the live staking view) at epoch end. `blockRewardEligibleForVoterSplit` reads the frozen opt-in flag and rates from the same snapshot. Any stake activity, rate change, or opt-in toggle between `PutPollResult` and the epoch's last block does not shift this epoch's distribution — it takes effect at the following `PutPollResult`. This gives voters a roughly 1.5-epoch reaction window when a delegate raises its commission rate or opts in / out: the change takes effect at the next `PutPollResult` (mid-epoch) and applies to rewards in the epoch after that.
+Chunk order is guaranteed by block order — a later block cannot pay a
+smaller `VoterIndex` window of the same delegate.
 
-#### 3.5 Commission Rate Source: `DelegateProfile` Contract
+### §8 Compound Routing
 
-Commission rates are read from the existing `DelegateProfile` contract, which is the same source Hermes reads today. This eliminates the operator UX churn a new native action would introduce: delegates continue to manage rates through the same signer path and (in the future) the same iotex-hub UI they already use.
+The compound route (Route.kind = 1) reuses the existing `AutoDeposit`
+contract. No separate compound-sweep phase exists — routing happens
+inline for each voter as the window is paid.
 
-**Contract layout used.**
+#### 8.1 AutoDeposit lookup
 
-- Mainnet address: `0xfa7f50866ac45d84adf54bc767c885f92750e258`
-- Testnet address: `0xd19ffB48a5C18B77c541D32c1B1ac2440c287774`
-- Interface used: `getEncodedProfile(address delegate) view returns (bytes)`
-- Fields consumed (names as they exist on-chain today):
-  - `blockRewardPortion` — voter-take basis points for the block-reward stream
-  - `epochRewardPortion` — voter-take basis points for the epoch-reward stream
-  - `foundationRewardPortion` — **ignored** by IIP-59 (foundation bonus stream is out of scope; already at zero on mainnet)
-
-**Semantics inversion.** The contract and Hermes both treat the stored portion as **voter-take** (the share going to voters). IIP-59's on-chain fields (§1) store **commission** (the share the delegate keeps). The poll bridge inverts once at snapshot time:
-
-```
-BlockCommissionRate = 10000 - blockRewardPortion   // clamped to [0, 10000]
-EpochCommissionRate = 10000 - epochRewardPortion
-```
-
-**Missing-profile default.** If `getEncodedProfile` returns empty bytes or the delegate has never called `updateProfile`, both rates are set to `0` on the poll snapshot. Combined with `VoterRewardOnchainOptIn`'s independent gate (§3.7), this means: an opted-in delegate that forgets to configure their `DelegateProfile` will grant **100% commission** (voters get nothing). This is intentional — protecting voters from a mis-configured delegate is the delegate's responsibility, and the opt-in transaction is expected to come *after* the profile is set. Node operators SHOULD surface a warning in delegate tooling when an opt-in tx is submitted against a delegate with a zero-portion (or missing) profile.
-
-**Bridge implementation.** At `PutPollResult`, one `evm.SimulateExecution` call per poll candidate is issued against the frozen block state. With ~100 delegates per epoch, this adds ~100 read-only EVM calls per `PutPollResult` (~10–50 ms total). The pattern mirrors the existing consortium poll bridge (`action/protocol/poll/consortium.go`), which already calls into the EVM from consensus. Results are cached inside the poll snapshot and are never re-read from the contract during an epoch.
-
-**Contract governance prerequisite.** `DelegateProfile.owner()` is currently a single externally-owned account (`0x68c12a8c5d5f0a1fd13319ba4840301b0c93bd4f`). That account can rewrite every delegate's portion via `updateProfileForDelegate`. Before IIP-59 activation on mainnet, one of the following governance actions MUST land:
-
-1. Transfer ownership to a multisig with a documented signer set (recommended); OR
-2. Burn ownership (contract becomes append-only via delegate-owned `updateProfile`); OR
-3. Add on-chain caps and time-delay on `updateProfile*` writes and a challenge window.
-
-Absent one of these, a single EOA compromise can silently redirect voter reward across the entire delegate set the moment the fork activates.
-
-#### 3.6 Compound via `AutoDeposit` Contract
-
-Hermes today reads the existing `AutoDeposit` contract (mainnet `io108ckwzlzpkhva7cnfceajlu7wu6ql5kq95uat9`) to decide whether a voter's share is reinvested into a native bucket or transferred to their wallet. IIP-59 preserves this UX by consulting the same contract at distribution time.
-
-**Contract interface used.**
-
-- `bucket(address voter) view returns (int256 bucketId)` — voter's registered target native bucket (0 = not registered)
-- No writes issued to the contract by the protocol.
-
-**Routing algorithm.** For each voter share `S` in `distributeToVoters`, the protocol determines routing under the following pre-conditions (all four must hold for `AddDeposit`):
-
-1. `bucketId := AutoDeposit.bucket(voter)` returns a non-zero value.
-2. `bucket := staking.getBucket(bucketId)` succeeds and `bucket.Owner == voter`.
-3. `bucket.AutoStake == true`.
-4. `bucket.status == active` (not withdrawn / not in unbonding).
-
-If all four hold, the protocol calls `Staking().AddDeposit(bucketId, S)` inside the block executor (native path, not via EVM). Otherwise, `S` is credited to `voter.unclaimedBalance` for pull-claim via the existing `ClaimFromRewardingFund` action.
-
-**Cost.** The `AutoDeposit.bucket(voter)` call is a single `evm.SimulateExecution` per voter share, executed only inside the epoch's last block. Reads for un-registered voters are cheap (mapping miss returns `0` immediately). At mainnet scale (~40k voter credits/epoch, ~5% compound registration rate historically) this is ~2k EVM reads bounded to a single block — ~10-40 ms of extra execution at the epoch's last block. `AddDeposit` itself uses the same code path as user-initiated deposits, so gas accounting and event semantics are unchanged.
-
-**LSD parity with Hermes.** LSD (contract-staking v1/v2/v3) holders' buckets are owned by the staking contract, not by the token holder — so `bucket.Owner == voter` fails and their share is routed to `unclaimedBalance`. Same behavior as Hermes today (iotex-hub's compound registration UI already filters `isNativeBucket && autoStake`).
-
-**Snapshotting.** Compound preferences are read live at drain time, **not** frozen at `PutPollResult`. A voter can register in the compound contract mid-epoch and have that preference take effect at the immediately following epoch end. This is a UX choice: compound registration is a low-frequency operation and delaying it by up to 1.5 epochs would surprise users who register right after the epoch boundary. The trade-off is that a coordinated flip of compound state right before the epoch's last block can shift routing, but not amounts — an economically neutral change.
-
-#### 3.7 Per-Delegate Opt-In and Legacy Coexistence
-
-`VoterRewardOnchainOptIn` gates all IIP-59 behavior at the per-delegate level. It is set by `SetVoterRewardOptIn` (§2) and snapshotted at `PutPollResult` (§3.4).
-
-**Eligibility predicate.**
-
-```go
-func (p *Protocol) blockRewardEligibleForVoterSplit(fCtx FeatureCtx, cand *state.Candidate) bool {
-    return !fCtx.NoVoterRewardDistribution &&
-        cand != nil &&
-        cand.VoterRewardOnchainOptIn &&
-        (cand.BlockCommissionRate > 0 || cand.EpochCommissionRate > 0)
-}
-```
-
-- Pre-fork (`NoVoterRewardDistribution == true`): predicate is always false — legacy behavior for every delegate. Opt-in transactions before the fork are rejected at the handler.
-- Post-fork, opt-out: predicate is false — full block+epoch reward flows to `RewardAddress`; off-chain Hermes continues to distribute for that delegate. No block-reward pool entry is written.
-- Post-fork, opt-in, zero rates: predicate is false — same as opt-out but the delegate has explicitly signaled intent. Useful as a two-step migration (opt-in first, then rate takes effect at the following epoch when the profile update snapshots).
-- Post-fork, opt-in, non-zero rate on at least one stream: predicate is true — pool + snapshot + batched log path.
-
-**Coexistence with Hermes.** During the transition window, both systems are live in parallel — opt-out delegates are handled by off-chain Hermes exactly as today; opt-in delegates are handled by the protocol. To prevent double-payment, the Hermes service MUST filter delegates whose on-chain `VoterRewardOnchainOptIn` is true and skip them in its `distributeRewards` batch. The opt-in state is queryable via existing candidate RPC (§7.10), so no new endpoint is required. A grace period between fork activation and the first opt-in is expected (delegates verify tooling before switching).
-
-**Reversibility.** `SetVoterRewardOptIn(false)` is allowed. Effect is delayed by one epoch via the poll snapshot. Any block-reward pool entry accumulated while opt-in was still true is drained under the old (opt-in) semantics at the following epoch end — voters are not shortchanged by a mid-flight reversal. Future block rewards go to the legacy path from the epoch after the flip.
-
-**Deprecation exit ramp.** A future hard fork MAY promote the flag to always-true (drop the `cand.VoterRewardOnchainOptIn` clause from the predicate), forcing every delegate onto the protocol path and enabling Hermes to be shut down. That fork is out of scope for IIP-59; this proposal only introduces the mechanism.
-
-### 4. Voter Claim Flow
-
-Voters claim accumulated rewards using the **existing** `ClaimFromRewardingFund` action. No change needed — their reward account balance now includes auto-distributed voter rewards in addition to any other rewards. Voters who registered a compound preference via the `AutoDeposit` contract have their share **automatically reinvested** at each epoch's last block (§3.6) and skip the claim step entirely.
+The AutoDeposit interface exposed to the protocol is a Solidity contract
+call:
 
 ```
-                    ┌───────────────────────────────────────┐
-                    │        Rewarding Protocol             │
-                    │                                       │
-  Epoch end ───────►│  GrantEpochReward()                   │
-                    │    ├─ split epoch stream by rateₑ     │
-                    │    ├─ drain block-reward pool         │
-                    │    ├─ split pooled amount by rateᵦ    │
-                    │    ├─ aggregate delegate commission ──►  delegate.rewardAccount
-                    │    │                                  │
-                    │    ├─ per-voter route via AutoDeposit │
-                    │    │   ├─ registered + active bucket ──►  Staking.AddDeposit(bucketId, sᵢ)
-                    │    │   └─ otherwise ───────────────────►  voterᵢ.unclaimedBalance
-                    │    │                                  │
-                    │    └─ emit DelegateDistributed log    │
-                    └───────────────────────────────────────┘
-
-  Voter claims ────► ClaimFromRewardingFund()             ──► IOTX transferred to voter
+autoDeposit.bucketFor(voter address) -> (uint256 bucketId, bool ok)
 ```
 
-### 5. Migration Plan
+For each voter in the payment window:
 
-| Step | Action | Timeline |
-|------|--------|----------|
-| 1 | Move `DelegateProfile` ownership to multisig (or burn); confirm signer set | **Pre-fork prerequisite** |
-| 2 | Deploy protocol upgrade with `SetVoterRewardOptIn`, contract-rate bridge, compound bridge, and pending pool | Hard fork |
-| 3 | Delegates verify their `DelegateProfile` portions are set as desired | Post-fork |
-| 4 | Delegates opt in: `SetVoterRewardOptIn(true)` | Post-fork, delegate-paced |
-| 5 | Monitor auto-distribution for opted-in delegates | 1–2 weeks per cohort |
-| 6 | Hermes service filters opt-in delegates from `distributeRewards` | Coordinated with (4) |
-| 7 | Deprecate Hermes service once all delegates have opted in | Final |
-| 8 | Optional: hard fork to remove `VoterRewardOnchainOptIn` gate (force-migrate) | Future proposal |
+1. Call `bucketFor(voter)`.
+2. If `!ok`, route Credit.
+3. If `ok`, look up native bucket `bucketId`.
+   - If `bucket.Owner != voter` → Credit (bucket ownership changed).
+   - If `!bucket.AutoStake` → Credit (auto-stake was toggled off).
+   - If `bucket.Status != active` → Credit (bucket is unstaking or
+     withdrawn).
+   - Otherwise, call `native.AddDeposit(bucketId, share)` and route
+     Compound.
 
-Delegates can opt in at their own pace. During the transition period:
+The AutoDeposit contract itself is unmodified; the protocol is a new
+consumer.
 
-- `VoterRewardOnchainOptIn = false` (default): Legacy behavior — block reward is credited to the delegate's reward account per block; epoch reward is credited whole. Off-chain Hermes continues distribution for this delegate; no on-chain behavior changes.
-- `VoterRewardOnchainOptIn = true`: Protocol handles both streams automatically, using the current `DelegateProfile` portions inverted into `BlockCommissionRate` / `EpochCommissionRate` at the next `PutPollResult`. Off-chain Hermes MUST skip this delegate to avoid double-payment.
+#### 8.2 Failure isolation
 
-**Rate mapping from Hermes era.** Because IIP-59 reads the same `DelegateProfile` fields Hermes reads, and uses the same voter-take semantics, a delegate whose `DelegateProfile` portions are unchanged before and after opt-in sees **identical** voter net income (modulo Hermes's service fee, which disappears in IIP-59 — small net gain for voters). No rate reconfiguration is required.
+If `native.AddDeposit` reverts (e.g., because the bucket transitioned to
+unstaking between snapshot and payout), the failure is caught, the route
+is downgraded to Credit for that voter, and a warn log is emitted. The
+chunk continues. This is the per-item degrade rule (§10.1) applied to
+compound routing.
 
-### 6. ioctl Integration
+### §9 Cursor Persistence
 
-New ioctl command for delegates:
+#### 9.1 State layout
 
-```bash
-# Delegate: opt in to protocol-native distribution
-ioctl stake2 optin
-
-# Delegate: opt back to legacy Hermes-managed distribution
-ioctl stake2 optin --off
-
-# Voter: check unclaimed rewards (already exists)
-ioctl action balance <address>
-
-# Voter: claim rewards (already exists)
-ioctl action claim <amount>
+```
+namespace = state.RewardingNamespace
+key       = "epoch_drain_cursor"   // singleton
+value     = SerializeDeterministic(EpochDrainCursor{...})
 ```
 
-Commission rate updates continue to use whatever tool the delegate uses today (contract call to `DelegateProfile.updateProfile` from the delegate's owner address, or the iotex-hub UI).
+The cursor is a singleton across all delegates. Only one drain is in
+flight at any time (era N-1's drain always completes — via graceful
+degrade if necessary — before era N's Phase A materializes a new cursor).
 
-### 7. Skeleton Implementation
+#### 9.2 Protobuf
 
-#### 7.1 Candidate State Extension (`action/protocol/staking/candidate.go`)
-
-```go
-// Candidate represents a delegate candidate
-type Candidate struct {
-    Owner                    address.Address
-    Operator                 address.Address
-    Reward                   address.Address
-    Identifier               address.Address
-    Name                     string
-    Votes                    *big.Int
-    SelfStakeBucketIdx       uint64
-    SelfStake                *big.Int
-    BLSPubKey                []byte
-    VoterRewardOnchainOptIn  bool    // gates §3 distribution
-    BlockCommissionRate      uint64  // basis points 0–10000; snapshotted from DelegateProfile
-    EpochCommissionRate      uint64  // basis points 0–10000; snapshotted from DelegateProfile
+```proto
+message EpochDrainDelegateWork {
+  bytes candidate_identifier = 1;
+  bytes voter_amount_frozen  = 2;   // big.Int
 }
 
-// CommissionCut returns the delegate's commission from a given reward for the
-// given stream. Callers pass rate = BlockCommissionRate or EpochCommissionRate.
-func (c *Candidate) CommissionCut(reward *big.Int, rateBps uint64) *big.Int {
-    if rateBps == 0 {
-        return big.NewInt(0)
-    }
-    cut := new(big.Int).Mul(reward, big.NewInt(int64(rateBps)))
-    cut.Div(cut, big.NewInt(10000))
-    return cut
+message EpochDrainCursor {
+  uint64                            target_era     = 1;
+  uint32                            delegate_index = 2;
+  repeated EpochDrainDelegateWork   delegates      = 3;
+  uint32                            voter_index    = 4;
 }
 ```
 
-Neither commission-rate field is settable by any protocol action. Both are populated by the poll layer at `PutPollResult` from the `DelegateProfile` contract (see §7.9). `VoterRewardOnchainOptIn` is settable by `SetVoterRewardOptIn` (§7.2, §7.11).
-
-#### 7.2 SetVoterRewardOptIn Action Handler (`action/protocol/staking/handlers.go`)
-
-```go
-func (p *Protocol) handleSetVoterRewardOptIn(
-    ctx context.Context,
-    act *action.SetVoterRewardOptIn,
-    sm protocol.StateManager,
-) (*action.Receipt, error) {
-    actCtx := protocol.MustGetActionCtx(ctx)
-    featureCtx := protocol.MustGetFeatureCtx(ctx)
-
-    if featureCtx.NoVoterRewardDistribution {
-        // Pre-fork guard: action is not yet active.
-        return nil, action.ErrInvalidAct
-    }
-
-    cand := p.candidateCenter.GetByOwner(actCtx.Caller)
-    if cand == nil {
-        return nil, errors.New("caller is not a registered candidate owner")
-    }
-    if cand.VoterRewardOnchainOptIn == act.OptIn {
-        // Idempotent no-op: emit receipt but do not mutate state.
-        return p.settleAction(ctx, sm, protocol.SuccessReceiptStatus, nil,
-            &action.Log{
-                Address: p.addr.String(),
-                Topics:  []hash.Hash256{hash.BytesToHash256([]byte("VoterRewardOptInUnchanged"))},
-                Data:    []byte{boolByte(act.OptIn)},
-            },
-        )
-    }
-
-    updated := cand.Clone()
-    updated.VoterRewardOnchainOptIn = act.OptIn
-
-    if err := p.candidateCenter.Upsert(updated); err != nil {
-        return nil, err
-    }
-    if err := p.putCandidate(sm, updated); err != nil {
-        return nil, err
-    }
-
-    // Effective at next PutPollResult; the poll snapshot picks up the new value
-    // and the epoch that follows uses it (see §3.4 / §3.7).
-    return p.settleAction(ctx, sm, protocol.SuccessReceiptStatus, nil,
-        &action.Log{
-            Address: p.addr.String(),
-            Topics:  []hash.Hash256{hash.BytesToHash256([]byte("VoterRewardOptInSet"))},
-            Data:    []byte{boolByte(act.OptIn)},
-        },
-    )
-}
-```
-
-#### 7.3 Modified GrantBlockReward (`action/protocol/rewarding/reward.go`)
-
-```go
-func (p *Protocol) GrantBlockReward(ctx context.Context, sm protocol.StateManager) (*action.Log, error) {
-    blkCtx := protocol.MustGetBlockCtx(ctx)
-    featureCtx := protocol.MustGetFeatureCtx(ctx)
-
-    // ... existing: read producer, resolve to delegate, compute blockReward + effectiveTip ...
-
-    if p.blockRewardEligibleForVoterSplit(featureCtx, delegate) {
-        // Tip goes to producer directly (inclusion incentive, not delegate comp).
-        if effectiveTip.Sign() > 0 {
-            if err := p.creditRewardAccount(sm, delegate.Reward, effectiveTip); err != nil {
-                return nil, err
-            }
-        }
-        // Accumulate base block reward into the pending pool; freeze the
-        // current rate + reward address alongside the amount so an orphan
-        // drain (delegate falls out of top-N) can still split correctly.
-        if err := p.addPendingBlockReward(sm, delegate, blockReward); err != nil {
-            return nil, err
-        }
-        return &action.Log{
-            Address: p.addr.String(),
-            Topics:  []hash.Hash256{hash.BytesToHash256([]byte("BlockRewardPending"))},
-            Data:    append(delegate.Identifier.Bytes(), blockReward.Bytes()...),
-        }, nil
-    }
-
-    // Legacy path: credit total (base + tip) to delegate immediately.
-    return p.creditRewardAccount(sm, delegate.Reward, totalReward)
-}
-
-// addPendingBlockReward reads the delegate's current pending pool entry, adds
-// blockReward, and writes it back. State key: pendingBlockReward || delegate.Identifier
-// (21 bytes). The rewardAddr and blockCommissionRate on the entry are refreshed
-// from the caller's poll-snapshotted candidate — the freshest available.
-func (p *Protocol) addPendingBlockReward(
-    sm protocol.StateManager,
-    delegate *state.Candidate,
-    blockReward *big.Int,
-) error {
-    key := pendingBlockRewardKey(delegate.Identifier)
-    var pool pendingBlockRewardPool
-    switch _, err := sm.State(&pool, protocol.KeyOption(key)); errors.Cause(err) {
-    case nil, state.ErrStateNotExist:
-        // ok — nil-value or missing both start from zero
-    default:
-        return err
-    }
-    if pool.Amount == nil {
-        pool.Amount = big.NewInt(0)
-    }
-    pool.Amount.Add(pool.Amount, blockReward)
-    pool.RewardAddr = delegate.Reward.Bytes()
-    pool.BlockCommissionRate = delegate.BlockCommissionRate
-    _, err := sm.PutState(&pool, protocol.KeyOption(key))
-    return err
-}
-```
-
-#### 7.4 Modified GrantEpochReward (`action/protocol/rewarding/reward.go`)
-
-```go
-func (p *Protocol) GrantEpochReward(ctx context.Context, sm protocol.StateManager) ([]*action.Log, error) {
-    blkCtx := protocol.MustGetBlockCtx(ctx)
-    bcCtx := protocol.MustGetBlockchainCtx(ctx)
-    featureCtx := protocol.MustGetFeatureCtx(ctx)
-    rp := rolldpos.MustGetProtocol(protocol.MustGetRegistry(ctx))
-    epochNum := rp.GetEpochNum(blkCtx.BlockHeight)
-
-    // Existing: read admin config, calculate epoch reward per delegate
-    a := admin{}
-    if err := p.state(sm, _adminKey, &a); err != nil {
-        return nil, err
-    }
-    if err := a.grantEpochReward(sm, epochNum, bcCtx); err != nil {
-        return nil, err
-    }
-
-    // ... existing top-delegate selection and reward calculation ...
-
-    var logs []*action.Log
-    drainedTop := make(map[address.Address]struct{})
-
-    for i, delegate := range topDelegates {
-        epochReward := rewardPerDelegate[i]
-
-        // Fold in this delegate's accumulated block rewards.
-        pending, err := p.drainPendingBlockReward(sm, delegate.Identifier)
-        if err != nil {
-            return nil, err
-        }
-        drainedTop[delegate.Identifier] = struct{}{}
-
-        if p.blockRewardEligibleForVoterSplit(featureCtx, delegate) {
-            blockCut := delegate.CommissionCut(pending, delegate.BlockCommissionRate)
-            epochCut := delegate.CommissionCut(epochReward, delegate.EpochCommissionRate)
-            totalCommission := new(big.Int).Add(blockCut, epochCut)
-            totalReward := new(big.Int).Add(pending, epochReward)
-            voterPool := new(big.Int).Sub(totalReward, totalCommission)
-
-            rewardLog, err := p.distributeToVoters(ctx, sm, delegate,
-                totalCommission, voterPool, epochNum)
-            if err != nil {
-                return nil, errors.Wrap(err, "distribute to voters")
-            }
-            logs = append(logs, rewardLog)
-        } else {
-            // Legacy: full combined reward to delegate.
-            total := new(big.Int).Add(epochReward, pending)
-            if err := p.credit(sm, delegate.Reward, total); err != nil {
-                return nil, err
-            }
-        }
-    }
-
-    // Drain pending pools left by delegates that produced blocks earlier but
-    // are no longer in top-N (§3.3). Bounded by candidate count.
-    drainLogs, err := p.drainOrphanPendingPools(ctx, sm, epochNum, drainedTop)
-    if err != nil {
-        return nil, err
-    }
-    logs = append(logs, drainLogs...)
-    return logs, nil
-}
-
-// distributeToVoters splits voterPool across the frozen snapshot voter list,
-// routing each share to either AddDeposit (compound) or unclaimedBalance based
-// on the AutoDeposit contract (§3.6). Emits a single batched log per delegate.
-func (p *Protocol) distributeToVoters(
-    ctx context.Context,
-    sm protocol.StateManager,
-    delegate *state.Candidate,   // poll snapshot
-    totalCommission *big.Int,
-    voterPool *big.Int,
-    epochNum uint64,
-) (*action.Log, error) {
-    stakingProtocol := staking.MustGetProtocol(protocol.MustGetRegistry(ctx))
-    candIdentifier, err := address.FromString(delegate.Identity)
-    if err != nil {
-        return nil, err
-    }
-    voters, err := stakingProtocol.SnapshotVoterWeightsByCandidate(sm, candIdentifier)
-    if err != nil {
-        return nil, err
-    }
-    if len(voters) == 0 || voterPool.Sign() <= 0 {
-        // No voters snapshotted — full remainder to delegate.
-        totalCommission = new(big.Int).Add(totalCommission, voterPool)
-        if err := p.credit(sm, delegate.Reward, totalCommission); err != nil {
-            return nil, err
-        }
-        return p.newDelegateDistributedLog(candIdentifier, delegate.Reward,
-            totalCommission, big.NewInt(0), nil, nil, nil, epochNum, nil), nil
-    }
-
-    totalWeight := big.NewInt(0)
-    for _, v := range voters {
-        totalWeight.Add(totalWeight, v.Weight)
-    }
-    if totalWeight.Sign() == 0 {
-        totalCommission = new(big.Int).Add(totalCommission, voterPool)
-        return p.newDelegateDistributedLog(candIdentifier, delegate.Reward,
-            totalCommission, big.NewInt(0), nil, nil, nil, epochNum, nil),
-            p.credit(sm, delegate.Reward, totalCommission)
-    }
-
-    voterAddrs := make([]address.Address, 0, len(voters))
-    voterAmts := make([]*big.Int, 0, len(voters))
-    voterRoutes := make([]byte, 0, len(voters))
-
-    distributed := big.NewInt(0)
-    for _, v := range voters {
-        share := new(big.Int).Mul(voterPool, v.Weight)
-        share.Div(share, totalWeight)
-        if share.Sign() == 0 {
-            continue
-        }
-        route, err := p.compoundOrCredit(ctx, sm, v.Voter, share)
-        if err != nil {
-            return nil, err
-        }
-        voterAddrs = append(voterAddrs, v.Voter)
-        voterAmts = append(voterAmts, share)
-        voterRoutes = append(voterRoutes, route)
-        distributed.Add(distributed, share)
-    }
-
-    // Rounding dust to delegate.
-    dust := new(big.Int).Sub(voterPool, distributed)
-    if dust.Sign() > 0 {
-        totalCommission = new(big.Int).Add(totalCommission, dust)
-    }
-    if err := p.credit(sm, delegate.Reward, totalCommission); err != nil {
-        return nil, err
-    }
-
-    snapHash := stakingProtocol.VoterSnapshotHash(sm, candIdentifier)
-    return p.newDelegateDistributedLog(candIdentifier, delegate.Reward,
-        totalCommission, distributed, voterAddrs, voterAmts, voterRoutes,
-        epochNum, snapHash[:]), nil
-}
-```
-
-Where `compoundOrCredit` implements the routing decision from §3.6 (see §7.10) and `newDelegateDistributedLog` packs the batched receipt log defined in §3.2. `dedupedAmounts` are aggregated inside the loop to keep receipt payload bounded — voters with multiple buckets receive one entry each.
-
-#### 7.5 Voter Weight Snapshot (`action/protocol/staking/voter_weight_snapshot.go`)
-
-At each `PutPollResult`, alongside the commission-rate snapshot, the staking protocol writes a per-candidate blob of the frozen voter list:
-
-```go
-// Key layout: 1-byte tag + 20-byte candidate identifier.
-func voterWeightSnapKey(candID address.Address) []byte {
-    out := make([]byte, 1+len(candID.Bytes()))
-    out[0] = _voterWeightSnap
-    copy(out[1:], candID.Bytes())
-    return out
-}
-
-// SnapshotVoterWeights writes each candidate's live voter list to state.
-// Called from poll.setCandidates at PutPollResult, gated on the feature flag.
-// Incremental: unchanged blobs are skipped (byte equality); candidates whose
-// voter list is now empty have their blob DelState'd.
-func (p *Protocol) SnapshotVoterWeights(sm protocol.StateManager) error {
-    csr, err := ConstructBaseView(sm)
-    if err != nil {
-        return err
-    }
-    vd := csr.BaseView()
-    if vd.voterWeights == nil {
-        return nil
-    }
-    for _, cand := range vd.candCenter.All() {
-        candID := cand.GetIdentifier()
-        liveVoters := readSortedLiveVoters(vd.voterWeights, hash.BytesToHash160(candID.Bytes()))
-        _, newBlob, err := encodeVoterWeightSnapshot(liveVoters)
-        if err != nil {
-            return err
-        }
-        key := voterWeightSnapKey(candID)
-        oldBlob, err := readSnapshotBlob(sm, key)
-        if err != nil {
-            return err
-        }
-        switch {
-        case newBlob == nil && oldBlob != nil:
-            sm.DelState(protocol.NamespaceOption(_stakingNameSpace), protocol.KeyOption(key))
-        case newBlob != nil && !bytes.Equal(oldBlob, newBlob):
-            sm.PutState(pbFromBlob(newBlob), protocol.NamespaceOption(_stakingNameSpace), protocol.KeyOption(key))
-        }
-    }
-    return nil
-}
-
-// SnapshotVoterWeightsByCandidate is the reader consumed by distributeToVoters.
-// Returns nil (not error) when a candidate has no snapshot — the caller treats
-// this as "no voters" and credits the delegate.
-func (p *Protocol) SnapshotVoterWeightsByCandidate(
-    sr protocol.StateReader,
-    candID address.Address,
-) ([]VoterWeight, error) {
-    // ... State() with switch on state.ErrStateNotExist → decode → return ...
-}
-```
-
-**Why per-candidate blob rather than flat `(candidate, voter)` keys:** the state API does not support prefix iteration, so a flat layout would require an auxiliary index keyed by candidate. The per-candidate blob lets a single `State()` read return the entire voter list a delegate needs.
-
-**Determinism invariant.** The blob writer sorts by voter address before encoding; the reader consumes in that same order. Because the encoding is byte-deterministic for equal logical inputs, the "skip if unchanged" check in `SnapshotVoterWeights` is safe: unchanged voter sets produce byte-identical blobs across nodes.
-
-#### 7.6 GetActiveBucketsByCandidate — no longer used
-
-The PoC's `GetActiveBucketsByCandidate` helper is not needed in the final design: voter reward distribution reads from the snapshot (§7.5), not from live bucket state. This eliminates a whole class of edge cases — mid-epoch stake changes, indexer readiness skew across nodes, and self-stake bucket misclassification — that would otherwise need per-call handling in the reward path.
-
-#### 7.7 Action Definition (`action/setvoterrewardoptin.go`)
-
-```go
-package action
-
-// SetVoterRewardOptIn toggles a delegate's IIP-59 opt-in state.
-type SetVoterRewardOptIn struct {
-    AbstractAction
-    optIn bool
-}
-
-func NewSetVoterRewardOptIn(optIn bool) *SetVoterRewardOptIn {
-    return &SetVoterRewardOptIn{optIn: optIn}
-}
-
-func (s *SetVoterRewardOptIn) OptIn() bool { return s.optIn }
-
-func (s *SetVoterRewardOptIn) IntrinsicGas() (uint64, error) {
-    return 10000, nil
-}
-
-func (s *SetVoterRewardOptIn) Serialize() []byte {
-    if s.optIn {
-        return []byte{1}
-    }
-    return []byte{0}
-}
-```
-
-#### 7.8 Protobuf Extension (`iotextypes/action.proto`)
-
-```protobuf
-// SetVoterRewardOptIn toggles a delegate's opt-in to protocol-native
-// voter reward distribution introduced by IIP-59.
-message SetVoterRewardOptIn {
-    bool optIn = 1;
-}
-
-// Add to ActionCore.action oneof:
-message ActionCore {
-    // ... existing fields ...
-    oneof action {
-        // ... existing actions ...
-        SetVoterRewardOptIn setVoterRewardOptIn = 60;
-    }
-}
-
-// CandidateInfo carries all three IIP-59 fields:
-message CandidateInfo {
-    // ... existing fields ...
-    bool   voterRewardOnchainOptIn = 20;
-    uint64 blockCommissionRate      = 21;  // basis points
-    uint64 epochCommissionRate      = 22;  // basis points
-}
-```
-
-#### 7.9 Commission Rate Bridge (`action/protocol/staking/delegate_profile_bridge.go`)
-
-Called from `PutPollResult` alongside the voter-weight snapshot (§7.5). Populates `BlockCommissionRate` / `EpochCommissionRate` on the poll-snapshotted candidates.
-
-```go
-var (
-    // Hard-coded per §3.5 — real values are chain-parameter.
-    delegateProfileAddr = mustAddress("0xfa7f50866ac45d84adf54bc767c885f92750e258")
-    fieldBlockPortion   = "blockRewardPortion"
-    fieldEpochPortion   = "epochRewardPortion"
-)
-
-// SnapshotCommissionRates issues one read-only EVM call per candidate against
-// DelegateProfile.getEncodedProfile and writes the derived commission fields
-// back onto the passed poll snapshot slice in place.
-func (p *Protocol) SnapshotCommissionRates(
-    ctx context.Context,
-    sm protocol.StateManager,
-    cands []*state.Candidate,
-) error {
-    for _, c := range cands {
-        blk, epoch, err := p.readProfileForDelegate(ctx, sm, c.Identifier)
-        if err != nil {
-            return errors.Wrapf(err, "read profile for %s", c.Identifier)
-        }
-        c.BlockCommissionRate = invertToCommission(blk)
-        c.EpochCommissionRate = invertToCommission(epoch)
-    }
-    return nil
-}
-
-// readProfileForDelegate calls getEncodedProfile(delegate) via evm.SimulateExecution
-// against the block being sealed. Returns (blockPortionBps, epochPortionBps).
-// Empty / missing profile → (0, 0).
-func (p *Protocol) readProfileForDelegate(
-    ctx context.Context,
-    sm protocol.StateManager,
-    delegate address.Address,
-) (uint64, uint64, error) {
-    data, err := delegateProfileABI.Pack("getEncodedProfile", ethAddr(delegate))
-    if err != nil {
-        return 0, 0, err
-    }
-    out, _, err := evm.SimulateExecution(ctx, sm, delegateProfileAddr, data)
-    if err != nil {
-        // Contract not deployed / not registered — degrade to 0/0 (legacy path).
-        if isNotRegisteredErr(err) {
-            return 0, 0, nil
-        }
-        return 0, 0, err
-    }
-    return decodeProfilePortions(out) // parse ABI-encoded (fieldName → bytes) map
-}
-
-func invertToCommission(voterPortionBps uint64) uint64 {
-    if voterPortionBps >= 10000 {
-        return 0 // voter takes everything → delegate takes nothing
-    }
-    return 10000 - voterPortionBps
-}
-```
-
-#### 7.10 Compound Bridge (`action/protocol/rewarding/compound_bridge.go`)
-
-Called from `distributeToVoters` per voter (§7.4). Reads `AutoDeposit` and routes.
-
-```go
-var (
-    autoDepositAddr = mustAddress("io108ckwzlzpkhva7cnfceajlu7wu6ql5kq95uat9")
-)
-
-// Routing outcomes:
-const (
-    routeUnclaimedBalance = 0
-    routeAutoDeposit      = 1
-)
-
-func (p *Protocol) compoundOrCredit(
-    ctx context.Context,
-    sm protocol.StateManager,
-    voter address.Address,
-    amount *big.Int,
-) (byte, error) {
-    // Fast path: cheap contract mapping read; miss returns 0.
-    bucketID, err := p.readAutoDepositTarget(ctx, sm, voter)
-    if err != nil {
-        return 0, err
-    }
-    if bucketID == 0 {
-        return routeUnclaimedBalance, p.credit(sm, voter, amount)
-    }
-
-    stakingProtocol := staking.MustGetProtocol(protocol.MustGetRegistry(ctx))
-    bucket, err := stakingProtocol.BucketByIndex(sm, bucketID)
-    switch {
-    case errors.Is(err, staking.ErrBucketNotFound),
-        bucket == nil,
-        !bucket.Owner.Equal(voter),
-        !bucket.AutoStake,
-        !bucket.IsActive():
-        // Any precondition miss → credit to unclaimed balance.
-        return routeUnclaimedBalance, p.credit(sm, voter, amount)
-    case err != nil:
-        return 0, err
-    }
-
-    if err := stakingProtocol.AddDeposit(ctx, sm, bucketID, amount); err != nil {
-        // AddDeposit failure is unexpected on a fully validated bucket; degrade
-        // safely to unclaimedBalance rather than aborting the epoch.
-        return routeUnclaimedBalance, p.credit(sm, voter, amount)
-    }
-    return routeAutoDeposit, nil
-}
-
-func (p *Protocol) readAutoDepositTarget(
-    ctx context.Context,
-    sm protocol.StateManager,
-    voter address.Address,
-) (uint64, error) {
-    data, _ := autoDepositABI.Pack("bucket", ethAddr(voter))
-    out, _, err := evm.SimulateExecution(ctx, sm, autoDepositAddr, data)
-    if err != nil {
-        return 0, nil // conservative: unregistered
-    }
-    v, err := autoDepositABI.Unpack("bucket", out)
-    if err != nil || len(v) == 0 {
-        return 0, nil
-    }
-    id, ok := v[0].(*big.Int)
-    if !ok || id.Sign() <= 0 {
-        return 0, nil
-    }
-    return id.Uint64(), nil
-}
-```
-
-#### 7.11 Candidate RPC Surface (`action/protocol/staking/staking_statereader.go`)
-
-`CandidateInfo` responses expose all three new fields so both Hermes (to filter opt-in delegates) and iotex-hub (to render badges) can query without a new endpoint.
-
-### 8. Amendment v2 — Era-Based Distribution
-
-This section supersedes the per-epoch distribution cadence described in §3.2, the per-`PutPollResult` voter-weight-snapshot cadence in §3.4, and the batched `DelegateDistributed` log format in §3.2. The opt-in gate (§3.7), rate source (§3.5), compound routing (§3.6), pending-pool accumulator (§3.1), and orphan-drain semantics (§3.3) are unchanged in mechanism — only their firing frequency shifts from once-per-epoch to once-per-era.
-
-#### 8.1 Motivation
-
-The per-epoch design assumed O(2,000–4,000) voters per top delegate and O(40,000) voter credits per epoch. Mainnet enumeration (gRPC `ReadStakingDataMethod_BUCKETS`, 2026-07) surfaced **27,020 distinct voter addresses across 39,950 live buckets** — dominated by a long tail of small holders indexed once per address, not once per bucket. Combined with the measured trie-backed per-voter cost (~130μs — 2.5μs slot read + ~40μs `AddDepositForCompound` + trie overhead), the epoch-close block cost projects to:
-
-| Path | Per-voter | Total wall-clock |
-|---|---|---|
-| Slot-read + compound (in-memory mock) | ~42.5μs | **~1.15s** |
-| Slot-read + compound (trie-backed) | ~130μs | **~3.4s** |
-
-Post-Dardanelles the mainnet block interval is **2.5s**. Even the in-memory number leaves no headroom for consensus, block assembly, and other post-block work sharing the same block; the trie-backed number **exceeds the block budget outright**. A delegate-boundary chunking mitigation was prototyped (see reference implementation §7 pointer below) but is superseded by this amendment because it only spreads the cost — it does not reduce it — and re-introduces poll-snapshot-drift questions across the chunk window.
-
-#### 8.2 Three-Phase Decomposition
-
-The v2 architecture separates reward flow into three phases with distinct data dependencies:
-
-| Phase | Runs | Reads | Writes | Time-sensitive |
-|---|---|---|---|---|
-| **1 — Accrue** | every block | committee (poll), voter-take rate | `delegate.RewardAddress`, per-delegate pending pool | No |
-| **2 — Credit** | 1× per era (24 epochs) | pending pool, era voter-weight snapshot | `voter.unclaimedBalance`, pool reset | **Yes** — must consume before next snapshot |
-| **3 — Compound** | any block, background | `voter.unclaimedBalance`, opt-in flag, bucket state | bucket via `AddDepositForCompound`, `voter.unclaimedBalance -= amount` | No — deferrable arbitrarily |
-
-The critical observation is that **Phase 3 has no expiration**: `unclaimedBalance` is monotonic between a Phase 2 credit and either a Phase 3 compound or a user `Claim`. Phase 3 can therefore run at any cadence (including "never") without breaking correctness — a property the v1 design did not exploit because compound was fused with credit inside `distributeToVoters`.
-
-#### 8.3 Distribution Cadence — Per-Era
-
-Phase 2 fires at **era boundaries**, defined by:
+- `target_era` — the era whose Phase A produced this cursor. Records
+  provenance and is validated at drain time (mismatched target_era vs.
+  observed era is a consensus error).
+- `delegate_index` — index into `delegates` of the delegate currently
+  being drained.
+- `voter_index` — index into `snap.Entries` for the next voter to pay.
+  Zero when starting a new delegate.
+- `delegates` — the frozen work list from Phase A. Immutable across
+  the drain.
+
+#### 9.3 Erigon dual-storage
+
+The state manager persists all rewarding state through the standard
+`state.KeyValue` interface plus, for Erigon archive nodes, the
+`systemcontracts.GenericValueContainer` bridge. `EpochDrainCursor`
+implements `Encode()` and `Decode(GenericValue)` methods so archive
+replay reads/writes deterministically.
+
+### §10 Failure Handling and Graceful Degrade
+
+#### 10.1 Per-item degrade principle
+
+At any point in the pipeline where a per-delegate or per-voter operation
+can fail (bad snapshot, missing candidate, AutoDeposit revert), the
+protocol degrades that one item rather than aborting the block:
+
+| Failure | Degrade action |
+|---|---|
+| Snapshot for candidate not found in Phase A | Skip that delegate; continue to next. Emit warn log. Voter share stays in fund (fund.totalBalance not decremented for this delegate). |
+| Cursor references a candidate whose snapshot vanished | Skip and advance cursor: `DelegateIndex++`. Warn log. Pool for that candidate remains stranded until explicit cleanup. |
+| AutoDeposit lookup or AddDeposit revert | Downgrade voter to Credit. Warn log. |
+| Voter has zero weight in snap.Entries | Skipped by allocation (share = 0). |
+
+The block is **never** halted by any of the above.
+
+#### 10.2 Overrun handoff (cursor live at Phase A entry)
+
+When the cursor from era `N-1` has not fully drained by the time era `N`'s
+epoch-boundary block runs Phase A, the following procedure runs:
 
 ```
-isEraBoundary(epochNum) := epochNum > 0 && epochNum % EpochsPerRewardEra == 0
+existing = readEpochDrainCursor()
+if existing != nil:
+    // 1. Finalize what remains: emit a receipt log describing residue.
+    residue = sum(work.VoterAmountFrozen - pool(work.CandidateIdentifier).drained
+                  for work in existing.Delegates[existing.DelegateIndex:])
+    emit EPOCH_DRAIN_OVERRUN(era=existing.TargetEra, residue, remainingDelegates=len(existing.Delegates)-existing.DelegateIndex)
+
+    // 2. Do NOT decrement the fund for the residue: the pending pool
+    //    already holds it. The pool balance is a subset of fund.totalBalance.
+
+    // 3. Drop the cursor. Residue is absorbed into the next era's pool
+    //    via the normal Phase A credit path — new voter share is added
+    //    on top of any stranded pool balance.
+    deleteEpochDrainCursor()
+
+    // 4. Continue Phase A normally for era N. When Phase A materializes
+    //    a new cursor, its VoterAmountFrozen entries reflect the pool
+    //    totals including residue from era N-1.
 ```
 
-`EpochsPerRewardEra` is a **genesis parameter** (default `24` — one era ≈ 24 hours at IoTeX's ~1 hour per epoch). Setting it to `1` reproduces the v1 per-epoch cadence for testnet debugging; setting it to `0` is rejected at genesis parse.
+Key invariants:
 
-Phase 1 continues to run every block (unchanged). Between era boundaries, the per-delegate pending pool (§3.1) accumulates both block-stream and epoch-stream reward contributions — the epoch-stream contribution is credited into the same pool at each intra-era `GrantEpochReward` (which, under v2, only computes the delegate's epoch-share and folds it into the pool; no per-voter work).
+- **No fund overpayment.** Residue is already inside the pending pool,
+  which is a subset of `fund.totalBalance`. Rolling it into the next
+  era's cursor does not double-decrement the fund.
+- **Deterministic.** The residue value is computed from persisted state
+  (pool balance vs. `VoterAmountFrozen`) — every validator computes the
+  same value.
+- **Voter economic effect.** Voters whose payout was in the residue
+  window receive their share in the next era's drain instead. Their
+  weight for that next era is the *new* era's frozen snapshot, so the
+  share amount may differ slightly from what era `N-1` would have paid
+  — this is documented as an acceptable trade for the operational
+  safety of graceful degrade.
+- **Observability.** The `EPOCH_DRAIN_OVERRUN` receipt log is the
+  authoritative signal for off-chain monitoring. See §10.3.
 
-The era boundary block also runs the existing orphan drain (§3.3) so that a delegate who exited the top-N mid-era still has their accumulated block reward split correctly.
+The pre-v3 hard-fail semantic (`errors.Errorf("cursor unexpectedly live
+at Phase A entry")`) is **removed**. Under this proposal, no consensus
+error can be raised for cursor liveness; the degrade above is
+consensus-legal.
 
-#### 8.4 Voter-Weight Snapshot Cadence — Per-Era
+#### 10.3 Off-chain observability
 
-`SnapshotForEpochReward` (the writer described in §7.5, invoked from `PutPollResult`) is gated by `isEraBoundary`. Intra-era `PutPollResult` calls skip the snapshot write; the previous era's blob remains authoritative for all Phase 2 chunks within the current era.
+Two receipt logs make cursor pressure visible:
 
-Consequence: voters' proportional share of the era's rewards is computed against a single stable snapshot for the whole 24-epoch window. There is no "which epoch's snapshot governs which reward" ambiguity, no snapshot versioning, and — critically for the chunked Phase 2 credit path (§8.6) — no drift risk across the multi-block credit window.
+- `CURSOR_PROGRESS` (informational) — emitted at each `GrantVoterRewardChunk`
+  execution with `(TargetEra, DelegateIndex, VoterIndex, DelegatesRemaining)`.
+  Observability nodes track this over time; a plateau indicates a stuck
+  cursor.
+- `EPOCH_DRAIN_OVERRUN` — emitted only at overrun. Non-zero
+  count over recent epochs indicates the configured capacity is too
+  small for actual voter density (§11.4).
 
-Trade-off: a voter who stakes mid-era earns from that era only if they held stake at the previous era boundary; otherwise they earn from the following era. This matches Polkadot's per-era reward semantics and is considered acceptable at 24-hour granularity.
+Both are non-consensus (info-only) logs and do not affect state.
 
-Voter-weight *view* mutations (stake, unstake, restake, endorsement events) continue every block so live query surfaces stay accurate — only the **snapshot** used by Phase 2 freezes for an era.
+### §11 Genesis Parameters
 
-#### 8.5 State Model Amendments
+Under `genesis.Rewarding`:
 
-**Added.**
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `EpochsPerRewardEra` | `uint64` | 24 | Number of epochs per reward era. |
+| `VoterBudgetPerBlock` | `uint64` | 2000 | Max voter payments per block during Phase B. |
+| `CompoundBatchSize` | `uint64` | 500 | Max distinct delegate chunks per block during Phase B. |
 
-- `VoterRewardEraCursor` (rewarding namespace, singleton) — Phase 2 progress cursor. Absence = "no Phase 2 in progress."
-  ```proto
-  message VoterRewardEraCursor {
-      uint64 era_start_epoch = 1;
-      uint32 delegate_idx    = 2;   // index into the frozen era delegate list
-      uint32 voter_offset    = 3;   // per-delegate voter cursor
-  }
-  ```
-  Size: ~20-30 bytes. Written at era boundary, updated per Phase 2 chunk, deleted at Phase 2 completion.
+All three are read only when `NoVoterRewardDistribution == false`. When
+that flag is true (pre-fork), the values are ignored and the legacy
+single-block drain path runs.
 
-- Era completion sentinel — key `"vre" || era_start_epoch`, empty value. Written at Phase 2 completion, permanent. Replaces the per-epoch `EpochRewardHistoryKeyPrefix` sentinel for opted-in delegate rewards; the per-epoch sentinel is retained for the base epoch grant (§3.2's admin-config path) which continues to fire per-epoch.
+#### 11.1 Capacity formula
 
-- (Optional, Phase 3 strategy D) `compound_pending_set` — secondary index of voters with `unclaimedBalance > 0 && opt-in-to-compound`. Peak size ~20B × 27,020 ≈ ~540KB. Maintained by Phase 2 add, Phase 3 delete.
-
-**Modified.**
-
-- `SnapshotForEpochReward` write path — conditional on `isEraBoundary(epochNum)`. Non-boundary epochs skip the write. State churn on the snapshot namespace reduces ~24×.
-
-**Kept.**
-
-- `PendingBlockRewardPool` per delegate (from §3.1) — accumulator target for Phase 1, now drained at era boundary (not epoch boundary).
-- Existing per-epoch admin grant history (§3.2's `assertNoRewardYet`) — unchanged; guards the delegate-side reward computation which still runs every epoch.
-
-#### 8.6 Phase 2 — Chunked Credit Path
-
-Phase 2 is implemented as a **cursor-driven system action** emitted from `CreatePostSystemActions`. The cursor's presence in state (§8.5) determines whether the era boundary block and subsequent blocks emit the action:
-
-```
-CreatePostSystemActions(block):
-    if VoterRewardEraCursor is present:
-        emit GrantEraVoterReward(continuation)      # Phase 2 chunk
-    else if isEraBoundary(epochNum(block)):
-        emit GrantEraVoterReward(fresh)             # Phase 2 first chunk
-```
-
-`GrantEraVoterReward` runs at most `VoterBudgetPerBlock` voter credits per block (also a genesis parameter). Chunking is on **voter offset within delegate** — a delegate with 8,000 voters at `VoterBudgetPerBlock = 5000` is split across two blocks with the second block resuming from voter offset 5000. The IIP-59 §3.2 constraint that "one `DelegateDistributed` log carries all voters of a delegate" is dropped (see §8.7).
-
-Loop skeleton:
-
-```go
-for cursor.delegate_idx < len(eraDelegates) {
-    d := eraDelegates[cursor.delegate_idx]
-    voters := snapshot.Voters(d)                    // read once per delegate
-    for cursor.voter_offset < uint32(len(voters)) && creditsThisBlock < budget {
-        credit(voters[cursor.voter_offset], allocate(d, voters[cursor.voter_offset]))
-        cursor.voter_offset++
-        creditsThisBlock++
-    }
-    if cursor.voter_offset == uint32(len(voters)) {
-        emitEraVoterCredited(d, sliceFinal=true)    // last chunk flag per §8.7
-        cursor.delegate_idx++
-        cursor.voter_offset = 0
-    } else {
-        emitEraVoterCredited(d, sliceFinal=false)   // more coming next block
-        break
-    }
-}
-if cursor.delegate_idx == len(eraDelegates) {
-    drainOrphans(sm)                                // §3.3 semantics, era boundary
-    writeEraSentinel(cursor.era_start_epoch)
-    deleteCursor(sm)
-}
-```
-
-Peak per-block cost at `VoterBudgetPerBlock = 5000` is ~650ms trie-backed — comfortably inside the 2.5s budget with 74% headroom. At `= 2000` (recommended launch value), ~260ms.
-
-Cursor persistence between chunks uses the same state-manager path as any other rewarding write, so Fork/Snapshot/Revert semantics apply automatically — a mid-chunk revert rewinds the cursor along with the credits.
-
-#### 8.7 Log Semantic — `EraVoterCredited` Replaces `DelegateDistributed`
-
-The batched log defined in §3.2 (`DelegateDistributed`) required all of a delegate's voters to be credited in a single log emission, which forced the per-delegate atomicity constraint that made §8.6 chunking impossible. The v2 log format lifts this:
+The maximum voter population that can be drained in a single era is:
 
 ```
-event EraVoterCredited(
-    uint64  indexed era_start_epoch,
-    address indexed delegate,
-    address         rewardAddr,          // where delegate commission was credited
-    uint256         totalCommission,     // this delegate's total for the era
-    uint256         chunkVoterPool,      // amount credited by this log's voters
-    bytes32         snapshotHash,        // frozen era snapshot binding
-    address[]       voters,              // canonical sorted order
-    uint256[]       amounts,             // parallel array
-    uint8[]         routings,            // 0 = unclaimed balance, 1 = compound queued (§8.8)
-    uint32          chunk_seq,           // 0-indexed within (era, delegate)
-    bool            is_final             // true iff last chunk for this delegate
-)
+Capacity = VoterBudgetPerBlock × BlocksPerEra
+BlocksPerEra ≈ EpochsPerRewardEra × BlocksPerEpoch
 ```
 
-Off-chain aggregators sum by `(era_start_epoch, delegate)` and verify `Σ chunkVoterPool + totalCommission == era-payout(delegate)`. `snapshotHash` still binds each chunk to the exact voter snapshot used, so a verifier can independently replay any chunk.
+With defaults `VoterBudgetPerBlock=2000`, `EpochsPerRewardEra=24`, and
+`BlocksPerEpoch≈720` (assuming 24 delegates × 30 blocks per delegate),
+capacity ≈ `2000 × 17 280 = 34.56M` voter-payments per era. This
+comfortably exceeds the 30 000-voter design ceiling × 100 delegates =
+3M scenario.
 
-Total per-era log count is bounded by `Σ_delegates ⌈voters(d) / VoterBudgetPerBlock⌉` — ~6-14 logs per block during the Phase 2 window, ~40-100 logs per era at launch scale.
+Operators sizing the parameters should target:
 
-#### 8.8 Phase 3 — Deferred Compound
+```
+Capacity ≥ (design_voter_count × delegate_count) × safety_factor
+```
 
-Phase 2 credits voter shares to `unclaimedBalance`. Phase 3 sweeps voters who have both `unclaimedBalance > 0` and a valid opt-in-to-compound preference (§3.6 preconditions), calling `AddDepositForCompound` and debiting `unclaimedBalance` by the same amount.
+with `safety_factor ≥ 2` to leave headroom for bursty payment
+distributions (compound routes cost more than credit routes; the O(N)
+allocation loop per chunk sets a soft ceiling).
 
-Recommended strategy: **hybrid (Strategy D)**.
+#### 11.2 Reference sizing
 
-- **Continuous background sweep**: `CreatePostSystemActions` emits a `CompoundSweep` action every block. Handler processes up to `CompoundBatchSize` (genesis parameter, e.g., 500) voters from `compound_pending_set`. At 500 × 130μs = ~65ms trie, well inside the block budget. Per-day compound throughput at 34,560 blocks/day × 500 = 17.3M voter-slots, comfortably above the ~16k opt-in voters expected at launch.
-- **Lazy fallback on `Claim`**: user-initiated `ClaimFromRewardingFund` also inspects the opt-in preference and routes through `AddDepositForCompound` if applicable. Guarantees no voter is ever stuck waiting for the background sweep.
+For mainnet at IIP-59 activation:
 
-Two alternative strategies were considered and rejected as sole implementations: (a) continuous sweep alone leaves a voter whose sweep hasn't reached them yet unable to compound on-demand; (b) lazy-only violates the "automatic compound" UX inherited from Hermes.
+- 100 opted-in delegates × 100 average voters = 10 000 voter-payments
+  per era → drains in ~5 blocks. Well within budget.
+- Growth to 300 delegates × 300 voters = 90 000 voter-payments per
+  era → drains in 45 blocks. Comfortable.
+- Design ceiling 100 delegates × 30 000 voters = 3M voter-payments
+  per era → drains in 1500 blocks (~62 minutes). Requires
+  `EpochsPerRewardEra` ≥ 3 at defaults; today's 24-epoch era leaves
+  16× headroom.
 
-Phase 3 emits no new rewarding-side log — `AddDepositForCompound` already emits an `AddDeposit` event on the staking side, which is sufficient for off-chain reconstruction.
+### §12 Feature Gating
 
-**Phase 3 pause safety.** If Phase 3 is halted (bug, planned upgrade), `unclaimedBalance` accumulates but stays claimable via any of: user `Claim`, resumed sweep, external `CompoundBatch` action (if adopted per Strategy C — out of scope for launch). No correctness impact; upper bound on backlog is `(pause duration × opt-in voters × per-era credit)`.
+#### 12.1 Feature flag
 
-#### 8.9 First-Era Boundary
+A single feature flag governs the entire pipeline:
 
-The first era begins at `firstEra = ⌈forkEpoch / EpochsPerRewardEra⌉ × EpochsPerRewardEra`. Phase 1 accrues from `forkEpoch` onward; Phase 2 first runs at `firstEra`. Rewards earned between `forkEpoch` and `firstEra` are distributed at `firstEra` using the snapshot taken at `firstEra`. Documented as a known trade-off — the initial window earns pro-rata against the first-era snapshot, not against a per-block reconstruction.
+```
+featureCtx.NoVoterRewardDistribution : bool
+```
 
-`SetVoterRewardOptIn` transactions submitted before `forkEpoch` continue to be rejected at the handler (§3.7). Delegates who opt in during the first partial era have their share included from the following era boundary (per §3.4's 1.5-epoch reaction window, generalized to per-era in v2).
+- `true` (pre-fork) — legacy full-credit path. All post-fork code
+  paths are skipped: no snapshot capture into rewarding, no per-delegate
+  epoch split, no Phase B system action, no cursor persistence.
+- `false` (post-fork) — pipeline as specified in §§2–10.
 
-#### 8.10 Genesis Parameters (Rewarding)
+The flag is derived from the block context:
 
-| Parameter | Type | Default | Range | Note |
-|---|---|---|---|---|
-| `EpochsPerRewardEra` | uint64 | `24` | `[1, 96]` | 1 disables era mode (= v1 per-epoch), 96 = 4-day era |
-| `VoterBudgetPerBlock` | uint64 | `2000` | `[100, 10000]` | Phase 2 per-block voter-credit cap |
-| `CompoundBatchSize` | uint64 | `500` | `[50, 5000]` | Phase 3 per-block sweep size |
+```
+featureCtx.NoVoterRewardDistribution = !g.IsToBeEnabled(height)
+```
 
-All three are consulted only when `!fCtx.NoVoterRewardDistribution` (the existing IIP-59 fork gate, §3.7). No new fork gate is introduced.
+No new named fork is introduced. The `ToBeEnabled` height is set by
+governance ahead of activation and becomes the activation height of
+IIP-59.
 
-#### 8.11 Superseded Items in §3
+#### 12.2 Snapshot capture in staking
 
-The following elements from the initial (v1) §3 are superseded by §8:
+The staking-side snapshot extension (§4) is gated separately by
+`featureCtx.EpochRewardSnapshotEntries` (introduced in IIP-58). Both
+flags must be `true` for the reward pipeline to see `snap.Entries`. In
+practice both flags flip at the same `ToBeEnabled` height.
 
-- **§3.2 per-epoch drain of the pending pool** → per-era drain (§8.3).
-- **§3.2 `DelegateDistributed` log** → `EraVoterCredited` log (§8.7). The per-delegate atomicity constraint from §3.2's rationale ("one log carries all voters of a delegate") is dropped.
-- **§3.4 voter-weight snapshot written at every `PutPollResult`** → written only at era-boundary `PutPollResult` (§8.4).
-- **§3.4 opt-in and rate snapshotting** — unchanged in mechanism; the poll snapshot continues to freeze `VoterRewardOnchainOptIn`, `BlockCommissionRate`, `EpochCommissionRate` at every `PutPollResult`. Only the voter-weight snapshot cadence changes.
-- **§7.4's fused compound-inside-distribute path** → split: `distributeToVoters` under v2 credits `unclaimedBalance` and appends to `compound_pending_set`; the actual `AddDepositForCompound` call moves to Phase 3 (§8.8).
+#### 12.3 Pre-fork behavior preservation
 
-Every other §3 mechanism (opt-in gate §3.7, `DelegateProfile` bridge §3.5, `AutoDeposit` bridge §3.6, pending pool §3.1, orphan drain §3.3, per-delegate rate freeze) is unchanged.
+Pre-fork, all functions defined in this proposal (`splitCommission`,
+`splitDelegateEpochReward`, `runVoterDistributionChunk`,
+`distributeVoterOnly`, cursor read/write) exist as no-ops or legacy
+fallbacks:
 
-#### 8.12 New Test Cases (extending §Test Cases)
+- `splitDelegateEpochReward` returns `(amount, 0)` for every delegate
+  pre-fork.
+- `runVoterDistributionChunk` is not called (no cursor is ever
+  materialized because Phase A skips its cursor-write branch).
+- `voterBudgetPerBlock` and `epochDrainChunkSize` return 0.
+- Block reward code path branches into legacy full-credit before it
+  ever consults a poll snapshot.
 
-- **17. Era Boundary Credit** — With `EpochsPerRewardEra = 24`, run 24 epochs of accrual; assert Phase 2 fires only at epoch 24, credits all 27,020 test voters across ⌈27,020 / VoterBudgetPerBlock⌉ blocks, and the per-voter total matches the sum of 24 in-era per-epoch grants under the v1 legacy path.
-- **18. Chunked Cursor Lifecycle** — Assert cursor absent → written at era boundary → advanced through delegates → deleted at Phase 2 completion → sentinel `"vre" || era_start_epoch` written exactly once.
-- **19. Snapshot Stability Within Era** — Run mixed stake/unstake actions during epochs `[era, era+23]`; assert every Phase 2 chunk within the window reads the same voter list bytes.
-- **20. Phase 3 Backlog Convergence** — Simulate a 24-hour Phase 3 pause; assert `unclaimedBalance` accumulates, no compound events emit, then resume and assert backlog drains at `CompoundBatchSize` per block until empty.
-- **21. Era Boundary Overrun Guard** — Seed a `VoterRewardEraCursor` for era N-1 unfinished; execute the block that would open era N; assert a hard consensus error (per §Security Considerations' snapshot-determinism invariant, an unfinished prior-era cursor is a misconfigured `VoterBudgetPerBlock` and must not be silently overwritten).
-- **22. First-Era Rewards** — Fork at epoch `forkEpoch`, era boundaries at multiples of 24; assert rewards earned in `[forkEpoch, firstEra)` credit at `firstEra` using the `firstEra` snapshot.
-
-#### 8.13 Amended Migration Steps (extending §5)
-
-Insert between §5 Step 2 (protocol upgrade) and Step 3 (delegate verifies profile):
-
-- **Step 2a.** Set `EpochsPerRewardEra`, `VoterBudgetPerBlock`, and `CompoundBatchSize` in the genesis config alongside the fork height. Testnet SHOULD run with `EpochsPerRewardEra = 1` for one release cycle to exercise the code path against the legacy v1 per-epoch semantics before switching to `24`.
-- **Step 2b.** Off-chain Hermes filter (Step 6) MUST filter by `VoterRewardOnchainOptIn` on the same era boundary the on-chain path uses, not on epoch boundaries — otherwise a voter is double-paid or under-paid for up to 24 epochs. Existing per-epoch filter code is safe if it filters at every epoch (which subsumes era boundaries); the fix is purely observational.
-
-Steps 3–8 are unchanged.
+Fund invariants (`unclaimedBalance ≤ totalBalance`) hold across the
+transition — the pending pool balances are a subset of
+`fund.totalBalance`, exactly like the per-address unclaimed balances
+they supplement.
 
 ## Rationale
 
-### Why Basis Points for Commission
-
-Using basis points (1/100th of a percent) provides sufficient granularity:
-- 500 bps = 5%, 1000 bps = 10%, 2500 bps = 25%
-- Integer arithmetic avoids floating-point precision issues
-- Same convention used by most DeFi protocols and Cosmos SDK
-
-### Why Epoch-Boundary Rate Changes
-
-Commission rate changes take effect at the epoch boundary that follows the next `PutPollResult`, not immediately. This prevents a delegate from:
-1. Setting 0% commission to attract voters
-2. Switching to 100% right before epoch reward distribution
-3. Switching back to 0%
-
-The `PutPollResult`-anchored snapshot gives voters a roughly 1.5-epoch reaction window to observe a rate change and re-stake or unstake before it applies to a distribution.
-
-### Why Fold Block Reward Instead of Distributing Per Block
-
-Distributing block reward to voters at every block would run the per-voter loop up to ~100 times per epoch — expensive at 2,000+ voters per delegate and duplicative, since the same voter list is read each time. Accumulating block reward in a per-delegate pending pool during the epoch and folding it into the single epoch-end distribution has three properties that make it strictly better than per-block distribution:
-
-- **Per-block cost stays O(1):** one state read + one state write per produced block, independent of voter count.
-- **One deterministic distribution per epoch:** the same snapshot-based voter list and weights are used for both the epoch reward and the folded block reward, guaranteeing identical per-voter shares across nodes.
-- **Voter economics are preserved:** total voter income is identical to per-block distribution, because commission is applied to the sum `epochReward + Σ blockReward`, and the commission rate is constant across the epoch (frozen at the previous `PutPollResult`).
-
-### Why Per-Era (Not Per-Epoch) Distribution
-
-The v1 spec assumed per-epoch distribution would cost ~10-50 ms/epoch. Mainnet enumeration (see §8.1) surfaced a voter count roughly an order of magnitude larger than the modeling assumption, and end-to-end trie-backed cost measurement pushed the number to ~3.4 s per epoch-close block — exceeding the post-Dardanelles 2.5 s block interval. Three alternatives were compared:
-
-- **A. Optimize per-voter cost.** Landed as mitigation 2 (direct-slot `AutoDeposit` bucket read replacing `SimulateExecution`, ~26× per-call speedup — see the per-voter benchmarks referenced in §8.1). Necessary but not sufficient: reduces the per-voter cost, still O(voters) at the epoch-close block, still breaches the budget at mainnet scale.
-- **B. Chunk the epoch drain across blocks.** Cursor-driven, delegate-atomic. Cost is spread but not reduced; introduces a snapshot-drift question across the drain window, and forces a hidden constraint (`chunkSize ≥ max_delegates`) or a voter-list freeze (~1.6 MB of state churn per epoch) to preserve determinism. Rejected in favor of C.
-- **C. Change the distribution cadence** (this amendment). Reduces the per-day compute for the credit path by ~24× (single-day pool aggregation vs. 24 per-epoch fan-outs), eliminates the drift window (daily snapshot is naturally stable across the credit chunks), and drops the log-atomicity constraint that made B fragile. Trade-off: reward accrual visibility drops from hourly to daily — economically neutral (compound APY differs by <0.001% between per-hour and per-day compounding at 5%), UX-visible.
-
-The v2 amendment adopts C. Mitigation 2's per-voter speedup remains in force under v2 because Phase 2 still uses the same `AddDepositForCompound` path per credited voter — the speedup just applies at ~24× lower total volume.
-
-### Why Not Mandatory Auto-Distribution
-
-`VoterRewardOnchainOptIn = false` preserves legacy behavior because:
-- Some delegates have custom distribution arrangements with voters (LSD-only pools, side agreements) that Hermes was configured for.
-- Forcing auto-distribution at a fork would strand delegates who have not verified their `DelegateProfile` configuration.
-- Gradual migration is less risky than a hard switch; §3.7 gives a clean per-delegate ramp with bidirectional escape.
-- A future fork can drop the gate once every active delegate has migrated (see §5 Step 8).
-
-### Why Reuse `DelegateProfile` Instead of a Native `SetCommissionRate` Action
-
-An earlier draft of this proposal introduced a native `SetCommissionRate` action. The current design reuses the existing `DelegateProfile` contract:
-
-- **Operator UX continuity.** Delegates already configure portions through this contract via `updateProfile` or the iotex-hub UI. Adding a parallel native action would create two sources of truth that could drift.
-- **Two-stream semantics.** Hermes already treats block-stream and epoch-stream portions independently. Copying those two fields verbatim (with a semantic inversion, §3.5) is a strictly smaller change than defining a new dual-rate schema and migration.
-- **Governance is a knowable requirement.** The single-EOA owner risk on `DelegateProfile` (§3.5) is a known and fixable problem; §5 Step 1 makes ownership migration a prerequisite. A native action would appear cleaner but would also silently discard the existing operator tooling and iotex-hub integration — a cost that outweighs the governance work.
-- **Foundation Bonus scope.** The contract's `foundationRewardPortion` field is ignored by IIP-59. Foundation Bonus is already at zero on mainnet; folding it into IIP-59 is deferred to a follow-on proposal if it is ever reactivated.
-
-### Why Native Compound Instead of Deferring to Claim Time
-
-Two alternatives were considered for compound (reinvest into a native bucket):
-
-- **A. Extend `ClaimFromRewardingFund` with a target parameter.** Voters would opt for compound at claim time; the protocol splits amount → bucket vs. amount → wallet inside the claim handler. Advantages: no per-voter EVM read at distribution time; compound decision is voter-driven and revocable up to the last claim. Disadvantages: passive users lose today's "set once, keep reinvesting" behavior — they must re-issue a compound claim every epoch or accumulate for manual claiming. This is a UX regression vs. Hermes.
-- **B. Reuse `AutoDeposit` contract, read at drain time** (this proposal, §3.6). Preserves today's UX exactly: voter registers once, protocol auto-reinvests each epoch. Trade-off: one bounded EVM read per voter share at the epoch's last block (~10-40 ms/epoch at mainnet scale). At 40k credits/epoch this is comfortably below the block-time budget.
-
-B is chosen for parity with the Hermes-era UX. Delegates or third parties can still build a keeper that periodically calls `ClaimFromRewardingFund` for voters who prefer wallet delivery, but no native action extension is required.
-
-### Why a Single Batched `DelegateDistributed` Log
-
-Emitting one log per voter share at the epoch's last block would produce roughly `Σ voters ≈ 40,000` entries. At ~180 bytes each that is ~7 MB of receipt-log payload in a single block — a 100-500× increase over today's per-epoch log volume. Consequences observed in load modeling: receipt-trie storage growth, `eth_getLogs(fromBlock=epochBlock, toBlock=epochBlock)` timeouts, and pressure on block gas / size limits under LSD expansion scenarios.
-
-The batched `DelegateDistributed` log (§3.2) reduces the log count to `|topDelegates| + |orphanDrain| ≤ ~200` per epoch block, at the cost of a single fat payload per delegate (~30-40 KB for a 2,000-voter delegate). Total per-epoch-block receipt payload lands around ~0.5-1 MB, well within tooling budgets. The `snapshotHash` in the log binds the entry to the exact voter snapshot used so off-chain reconstructors can verify the split without replaying state.
-
-### Performance Impact
-
-Two hot paths are affected: `GrantBlockReward` (every block) and `GrantEpochReward` (once per epoch), plus a new bounded read at `PutPollResult` (mid-epoch).
-
-**Per-block (`GrantBlockReward`).** Under IIP-59 the block reward is accumulated into a per-delegate pending pool instead of credited directly. Extra work per block: exactly one state read and one state write against a 21-byte key. No per-voter iteration. Overhead: sub-millisecond.
-
-**Per-epoch (`GrantEpochReward`).** The per-voter distribution runs once per delegate at the epoch's last block:
-
-- Top delegates have ~2,000–4,000 voters after the snapshot (§3.4)
-- Total across all 36 delegates: ~40,000 voter credits per epoch
-- Each iteration: 1 multiplication + 1 division + 1 state write + 1 `AutoDeposit.bucket(voter)` read (~10-40 μs)
-- One additional per-delegate call reads the snapshot blob (§7.5); the blob is a single `State()` read, not a loop over indices
-- One additional per-delegate log emit (batched, §3.2)
-- Total additional time: ~10-50 ms per epoch (still small relative to 5-second block time)
-
-**Per-PutPollResult (mid-epoch).** Two extra passes over the ~100 candidates:
-
-- Voter-weight snapshot writer (§7.5): a few ms, dominated by proto marshal of changed blobs.
-- Commission-rate bridge (§7.9): one `evm.SimulateExecution` per candidate (~1 ms/call → ~100 ms/PutPollResult). This is a read-only, deterministic call against the block state, mirroring the consortium poll bridge pattern.
-
-Combined overhead: still well under the block-time budget at PutPollResult and at epoch close.
-
-## Backwards Compatibility
-
-- **Consensus change**: Yes — modifies both `GrantBlockReward()` and `GrantEpochReward()` output when a delegate has opted in via `VoterRewardOnchainOptIn`. Requires hard fork.
-- **State schema change**: Yes — adds `VoterRewardOnchainOptIn`, `BlockCommissionRate`, `EpochCommissionRate` to `Candidate` struct; adds per-delegate pending block reward pool; adds per-candidate voter weight snapshot blob. Under §8, additionally adds a `VoterRewardEraCursor` singleton in the rewarding namespace and a per-era completion sentinel. Requires state migration (all new fields default to zero-value on existing candidates, which correctly maps to the legacy path).
-- **Genesis schema change (v2)**: Adds three rewarding-namespace parameters — `EpochsPerRewardEra`, `VoterBudgetPerBlock`, `CompoundBatchSize` — with defaults 24 / 2000 / 500 (§8.10). Existing chains parse older genesis files by falling back to the defaults; testnets targeting the v1 per-epoch cadence set `EpochsPerRewardEra = 1`.
-- **Default behavior**: `VoterRewardOnchainOptIn = false` (the default at fork activation) preserves exact legacy behavior — block reward (base + tip) credited per block to `RewardAddress`, epoch reward credited whole to `RewardAddress`. No existing delegate or voter is affected until the delegate explicitly submits `SetVoterRewardOptIn(true)`.
-- **RPC compatibility**: Existing `ReadStakingData` APIs are unaffected. Three new fields (`voterRewardOnchainOptIn`, `blockCommissionRate`, `epochCommissionRate`) are added to `CandidateInfo` responses.
-- **Hermes compatibility**: Hermes MUST update its `distributeRewards` loop to skip delegates with `voterRewardOnchainOptIn == true` (available via the RPC changes above). Delegates that have not opted in continue to be handled by Hermes as before; the migration is per-delegate opt-in, not a hard cutover.
-- **`DelegateProfile` contract compatibility**: No contract-side changes are required for the rate-read path. The contract's owner-based `updateProfileForDelegate` continues to work; the operator-managed portion values become the source of truth for on-chain commission. A governance action on `DelegateProfile.owner()` is a pre-fork prerequisite (§5 Step 1).
-- **`AutoDeposit` contract compatibility**: No contract-side changes are required for compound. Existing `register(bucketId)` / `unregister()` behaviors are preserved; the protocol only calls the read-only `bucket(voter)` view.
-- **iotex-hub / delegate tooling**: Compound registration UI, commission-rate slider, and delegate registry pages continue to work as-is. A new "IIP-59 opt-in" toggle should be added but is not required for the migration to succeed.
-- **Restart safety**: The pending block reward pool, voter weight snapshot, and commission-rate snapshot are all persisted in state, so a node restart mid-epoch does not lose already-accumulated block rewards or the frozen distribution parameters. Compound and rate reads are pure functions of the block state and are automatically consistent under revert.
-
-## Test Cases
-
-### 1. Basic Distribution
-
-- Delegate with 1000 bps commission, 100 IOTX epoch reward
-- 3 voters: A (50 weighted votes), B (30), C (20)
-- Expected: Delegate gets 10 IOTX, A gets 45 IOTX, B gets 27 IOTX, C gets 18 IOTX
-
-### 2. Zero Commission
-
-- Delegate with 0 bps commission (legacy mode)
-- Expected: Full 100 IOTX to delegate's reward account. No voter distribution.
-
-### 3. Full Commission
-
-- Delegate with 10000 bps (100%) commission
-- Expected: Full 100 IOTX to delegate. Voters get 0.
-
-### 4. Rounding Dust
-
-- Delegate with 1000 bps, 1 IOTX reward, 3 equal-weight voters
-- Each voter gets 0.3 IOTX, delegate gets 0.1 IOTX + 0.0...01 Rau dust
-
-### 5. Unstaked Bucket Exclusion
-
-- Voter unstakes mid-epoch
-- Expected: Unstaked bucket excluded from distribution. Active voters get proportionally more.
-
-### 6. Commission Rate Change
-
-- Delegate changes rate from 1000 to 2000 bps mid-epoch
-- Expected: Current epoch uses old rate (1000). Next epoch uses new rate (2000).
-
-### 7. Self-Stake Inclusion
-
-- Delegate's self-stake bucket participates in distribution like any other voter
-- Expected: Delegate receives commission + proportional share of voter pool for self-stake
-
-### 8. Multiple Buckets Per Voter
-
-- Voter has 3 buckets staked to same delegate
-- Expected: Each bucket's weighted vote counted separately. Total voter reward = sum of per-bucket shares.
-
-### 9. Block Reward Folding
-
-- Delegate with 1000 bps commission produces 40 blocks in the epoch, each block reward 8 IOTX (total 320 IOTX pending)
-- Epoch reward for the delegate is 100 IOTX
-- Expected at epoch end: `totalReward = 420 IOTX`; delegate commission = 42 IOTX; voter pool = 378 IOTX distributed by frozen snapshot weights. No block-reward IOTX is stranded in the pending pool after `GrantEpochReward`.
-
-### 10. Non-Top-N Delegate Pending Drain
-
-- Delegate produced 10 blocks (80 IOTX pending), then lost votes and dropped out of top-N at epoch end
-- Expected: no epoch reward assigned; the 80 IOTX pending pool is drained by the trailing loop (§3.3); at commission=1000 bps, delegate gets 8 IOTX and voters share 72 IOTX by the snapshotted list.
-
-### 11. Voter Weight Snapshot Reaction Window
-
-- Delegate raises commission on `DelegateProfile` from 500 → 2000 bps in epoch N; the contract-side write receipt lands before epoch N's `PutPollResult`
-- Expected: epoch N's rewards still use 500 bps (already snapshotted from the previous epoch's `PutPollResult`). Epoch N+1 rewards use 2000 bps. A voter that unstakes in epoch N after `PutPollResult` is still counted in epoch N's distribution (snapshotted before the unstake) but not epoch N+1.
-
-### 12. Opt-In Effect Delay
-
-- Epoch N: delegate D has `VoterRewardOnchainOptIn = false` (legacy). D sends `SetVoterRewardOptIn(true)` in epoch N.
-- Epoch N's `PutPollResult` runs; snapshot freezes `optIn = true` for D.
-- Expected: epoch N's rewards still route to legacy Hermes path (`RewardAddress` gets full amount) because the poll snapshot used at epoch N grant time still carries `optIn = false` from epoch N−1. Epoch N+1's rewards use the on-chain split path. Opting back out (`SetVoterRewardOptIn(false)` in epoch N+2) has the same 1-epoch delay.
-
-### 13. Compound Routing Preconditions
-
-- Voter V has `AutoDeposit.bucket(V) = 7`; bucket 7 has `Owner == V`, `AutoStake == true`, `status == active`. Expected: V's share of the epoch reward is added to bucket 7 via `AddDeposit`; V's `unclaimedBalance` unchanged.
-- Voter V' has registered bucket 12 but `bucket 12.Owner != V'` (transferred). Expected: fall through to `unclaimedBalance` credit.
-- Voter V'' has registered bucket 9 with `AutoStake == false`. Expected: fall through to `unclaimedBalance` credit.
-- Voter V''' has no auto-deposit registration (`AutoDeposit.bucket(V''') = 0`). Expected: `unclaimedBalance` credit (legacy claim path).
-- Voter V'''' holds only LSD (contract-staking) buckets. Expected: `unclaimedBalance` credit (LSD holders cannot register with the compound contract; parity with today's Hermes behavior).
-
-### 14. Empty DelegateProfile Fallback
-
-- Delegate D has opted in (`VoterRewardOnchainOptIn = true`) but has never written a profile to `DelegateProfile`. `getEncodedProfile(D)` returns `0x`.
-- Expected: `SnapshotCommissionRates` records `{BlockCommissionRate: 10000, EpochCommissionRate: 10000}` (default = full commission = 100% to delegate). All voter reward flows to the delegate's `RewardAddress` in this epoch — behavior identical to legacy Hermes for a delegate with no configuration. Emit a diagnostic log so off-chain tooling can flag the missing profile.
-
-### 15. Batched `DelegateDistributed` Log Format
-
-- Delegate D distributes epoch reward to 87 voters with commission split.
-- Expected: exactly one `DelegateDistributed{epoch, delegate=D, voters=[87 addrs sorted], amounts=[87 uint64s in Rau], commissionAmount, snapshotHash, blockRewardComponent, epochRewardComponent}` receipt log per epoch, per opted-in delegate. `voters` and `amounts` arrays are index-aligned; `sum(amounts) + commissionAmount == blockRewardComponent × (10000 − blockCommRate) / 10000 + epochRewardComponent × (10000 − epochCommRate) / 10000 + commissionAmount`. `snapshotHash` matches the hash of the frozen voter weight snapshot for D at epoch N's `PutPollResult`. No per-voter `VOTER_REWARD` legacy log is emitted for opted-in delegates.
-
-### 16. Hermes Double-Spend Prevention
-
-- Delegates D₁ (opted in) and D₂ (legacy) both distribute epoch N rewards.
-- Expected: on-chain, D₁ generates `DelegateDistributed` log; D₂ generates a single grant to `RewardAddress(D₂)`. Off-chain Hermes filter reads `Candidate.VoterRewardOnchainOptIn` at the epoch snapshot boundary and skips D₁ entirely from `distributeRewards`; only D₂ is processed. Assert: for any voter V, per-epoch sum-of-receipts-across-chains-and-Hermes for V is exactly one grant — either on-chain (D₁-voter) or Hermes (D₂-voter), never both.
-
-## Implementation
-
-### Reference Implementation
-
-A proof-of-concept bot demonstrating the core logic (voter weight calculation, proportional distribution) is available at:
-- [`tools/voter-reward-poc/`](https://github.com/iotexproject/iotex-core/tree/master/tools/voter-reward-poc) — stateless tool that reads on-chain staking data, calculates voter weights, and generates reward distribution
-
-### Protocol Changes Required
-
-| File | Change |
-|------|--------|
-| `action/protocol/context.go` | Add `EnableVoterRewardDistribution` (or the equivalent `!NoVoterRewardDistribution`) feature flag |
-| `action/protocol/staking/candidate.go` | Add `VoterRewardOnchainOptIn bool`, `BlockCommissionRate uint64`, `EpochCommissionRate uint64` fields to `Candidate` struct |
-| `action/protocol/staking/handler_voter_reward_optin.go` | New action handler `handleSetVoterRewardOptIn`; idempotent flip; pre-fork guard; delegate-only sender check |
-| `action/protocol/staking/handlers.go` | Wire voter-weight-view deltas into all stake-mutating handlers |
-| `action/protocol/staking/voter_weight_view.go` | Incremental per-candidate sorted voter weight list backing the snapshot writer |
-| `action/protocol/staking/voter_weight_snapshot.go` | Per-candidate blob writer/reader (§7.5), invoked from `PutPollResult` |
-| `action/protocol/poll/util.go` | Call `SnapshotCommissionRates` (contract read via `evm.SimulateExecution` against `DelegateProfile`, then invert to commission) + `SnapshotVoterWeights` in `setCandidates`; carry `VoterRewardOnchainOptIn` from `staking.Candidate` into the poll snapshot |
-| `action/protocol/poll/delegate_profile_bridge.go` | New: `SnapshotCommissionRates` implementation calling `getEncodedProfile(delegate)`, decoding `EncodedDelegateProfile`, extracting `blockRewardPortion` + `epochRewardPortion`, `invertToCommission` (`10000 − portion*100`), empty-profile default |
-| `action/protocol/rewarding/voter_reward.go` | `distributeToVoters` implementation reading the snapshot; per-voter `compoundOrCredit` routing; batched `DelegateDistributed` log emitter |
-| `action/protocol/rewarding/auto_deposit_bridge.go` | New: `compoundOrCredit(voter, amount, sm)` — 4-precondition check (`bucketId != 0 && bucket.Owner == voter && AutoStake && status == active`) via `evm.SimulateExecution` against `AutoDeposit`; on success emit `AddDeposit` state transition; on any precondition miss fall through to `unclaimedBalance` credit |
-| `action/protocol/rewarding/reward.go` | Modify `GrantBlockReward()` to split `effectiveTip` (→ producer directly) from base reward (→ pending pool) via `blockRewardEligibleForVoterSplit` predicate; modify `GrantEpochReward()` to fold pending + call `distributeToVoters` per opted-in delegate with dual rate split; orphan pool drain with synthetic `*state.Candidate` reconstruction |
-| `state/candidate.go` | Add `VoterRewardOnchainOptIn`, `BlockCommissionRate`, `EpochCommissionRate` fields to `state.Candidate` (poll snapshot) |
-| `action/protocol/staking/staking_statereader.go` | Expose `VoterRewardOnchainOptIn`, `BlockCommissionRate`, `EpochCommissionRate` in candidate queries |
-| `api/grpcserver.go` | Surface the three new fields in gRPC responses |
-| `action/action.go` + `action/protocol/staking/protocol.go` | Register `SetVoterRewardOptIn` action type (protobuf tag `60`) |
-| `ioctl/newcmd/action/stake2optin.go` | New: `ioctl stake2 optin [--off]` CLI command |
-
-### Activation
-
-The protocol change is activated at a designated block height via the genesis configuration, following IoTeX's standard hard fork process.
+### Why per-era instead of per-epoch
+
+An earlier design (v1) distributed voter share at every epoch boundary.
+Two problems drove the pivot to per-era distribution:
+
+1. **Block reward accrual amortization.** Block reward voter share is
+   small per block (≤ 24 IOTX per opted-in producer) but arrives at every
+   block. Draining it every epoch means a mostly-idle epoch grant path
+   handles thousands of tiny credits. Drain per era, and the per-epoch
+   grant handles at most one credit per delegate.
+
+2. **Snapshot cost.** `snap.Entries` costs O(voters) to materialize.
+   Recomputing at every epoch under an incremental view was too slow at
+   30k voters. Once per era (with the view maintained incrementally
+   between eras) is affordable.
+
+### Why per-block chunking instead of per-epoch batch
+
+An earlier v2 design paid all voters in the single epoch-boundary block.
+At the 30k design ceiling that produced a single-block work item large
+enough to exceed 2.5s on reference hardware, which is a consensus liveness
+risk. Chunking to `VoterBudgetPerBlock` per block bounds the worst-case
+block work.
+
+### Why "delegate cap" AND "voter cap"
+
+`CompoundBatchSize` (per-delegate cap) alone protects against a chain with
+many small delegates: overhead per delegate (snapshot load, log emit) is
+non-trivial. `VoterBudgetPerBlock` (per-voter cap) alone protects against
+a chain with one huge delegate. Both caps are needed to cover both shapes.
+
+### Why graceful degrade instead of hard-halt on overrun
+
+Hard-halt violates the "per-item degrade over halt" principle (§10.1) at
+the era boundary. A single misconfigured genesis parameter must not stop
+mainnet block production. Rolling residue into the next era's pool is
+economically neutral for validators and adds one deterministic branch to
+Phase A; the alternative (halting the chain until governance intervenes)
+is unacceptable.
+
+### Why inline compound routing
+
+An earlier v2 design introduced a separate Phase 3 `CompoundSweep`
+performed hours after credit. Two issues:
+
+1. **State complexity.** A `compound_pending_set` state was required and
+   accumulated garbage on every failed compound; cleanup was manual.
+2. **Voter surprise.** Voters could observe their unclaimed balance jump
+   up (credit) then down (sweep) with no user-visible reason.
+
+Inline routing at credit time keeps the state simpler and the voter
+experience predictable, at the cost of ~15% more Phase B block work
+(one contract call per voter). At the observed voter-per-delegate median
+of ~100, this fits comfortably in the block budget.
+
+### Why keep the DelegateProfile contract as source of truth
+
+`DelegateProfile` is already the operator-facing source for commission
+rates in the Hermes era. Delegates use existing frontends and back-office
+processes to update it. Requiring them to instead learn a new on-chain
+transaction (`SetVoterRewardOptIn`) for the *same* rate is friction that
+delays opt-in. IIP-59 captures the rates from `DelegateProfile` at
+`PutPollResult` and folds them into the poll snapshot, so the source of
+truth is unchanged even as the enforcement mechanism moves on-chain.
+
+## Backward Compatibility
+
+Post-activation:
+
+- **Delegates that have not opted in** observe zero change. Every
+  `GrantBlockReward`, `GrantEpochReward`, `Claim` behaves as it did
+  before. Hermes continues to operate on their behalf.
+- **Delegates that opt in** see:
+  - `RewardAddress` starts receiving *only* commission, not the full
+    voter share. Their off-chain distribution scripts must be turned
+    off; running them alongside IIP-59 would double-distribute.
+  - The rewarding fund contract's `Claim` call no longer needs to be
+    invoked on behalf of voters — voters observe their unclaimed
+    balance grow directly, and can claim themselves via
+    `ClaimFromRewardingFund`.
+  - New per-chunk `DelegateDistributed` events replace off-chain
+    reports.
+
+Hermes-consuming dashboards continue to function during migration by
+adding a filter: opted-in delegates' rewards are reported from
+`DelegateDistributed` logs; non-opted-in delegates continue to be
+reported from Hermes.
+
+The two hard-migration risks:
+
+1. **Simultaneous run.** If Hermes is not switched off for a delegate
+   before their opt-in transaction lands, one epoch of double-payout
+   is possible. Operational runbook (documented separately) coordinates
+   opt-in with Hermes shut-off.
+
+2. **Reward-address change.** A delegate whose `RewardAddress` is a
+   contract that expects the full voter share (i.e., a Hermes-integrated
+   contract) will silently receive only commission after opt-in. This
+   is by design but requires operator awareness.
+
+Hermes is deprecated once all mainnet delegates have opted in.
+Governance decides the sunset date; IIP-59 does not schedule it.
 
 ## Security Considerations
 
-- **Commission rate manipulation**: Rate changes flow through the existing `DelegateProfile` contract and are snapshotted at `PutPollResult` for the following epoch. A delegate cannot mid-epoch swap a low rate for a high rate against already-earned rewards; the frozen `{BlockCommissionRate, EpochCommissionRate}` on the poll snapshot governs the whole epoch's distribution. Voters can watch `DelegateProfile` writes on-chain and react in the epoch-window gap.
-- **`DelegateProfile` contract owner governance** *(HARD PREREQUISITE)*: The `DelegateProfile` contract is currently owned by a single EOA (`0x68c12a8c5d5f0a1fd13319ba4840301b0c93bd4f`) with unrestricted rate-write authority. Once IIP-59 activates, that EOA becomes a load-bearing consensus dependency — a compromise could set every opted-in delegate's commission to 100% in one transaction. **Before the fork block**, ownership MUST be moved to a multisig (or burned to a timelocked contract), and instantaneous rate-change authority SHOULD be replaced by a delta-cap + time-delay mechanism (e.g., ≤ 500 bps change per epoch, effective 2 epochs later). This is a governance action, not a protocol change, but it is a launch prerequisite documented here so the migration plan (§5, Step 1) cannot bypass it.
-- **Semantic inversion invariant**: `DelegateProfile` historically stores **voter-take** portions (matching the analyser formula `distrReward = rewardToSplit × epochRewardPerc / 100`). The bridge in §7.9 MUST invert to commission-take via `commission = 10000 − portion × 100` before writing to the poll snapshot. A regression that reads the raw portion as commission would silently swap voter and delegate shares: delegates who set voter-take = 90% (giving voters most of the reward, as they do today) would suddenly receive 90% commission. This is guarded by (a) an explicit unit test comparing bridge output against an oracle Hermes distribution over 100 mainnet delegates, and (b) a rate-sanity check in `SnapshotCommissionRates` that rejects any single-epoch drop from `>50%` voter-take to `<10%` voter-take as an inversion smell.
-- **Opt-in coexistence race conditions**: During the migration window, some delegates route rewards on-chain (opted in) and some route via the legacy Hermes service (default). Hermes MUST filter opted-in delegates from `distributeRewards` at the same epoch boundary that the poll snapshot fixes, otherwise a voter is double-paid or under-paid for one epoch. The epoch-delay of the opt-in flip (§3.7) gives Hermes a full epoch to observe `VoterRewardOnchainOptIn == true` in the candidate list, filter it out of its next epoch payout, and stay in sync. A voter reconciliation job SHOULD compare on-chain `DelegateDistributed` logs against Hermes distributions per epoch until Hermes v1 is decommissioned.
-- **Compound reentrancy**: `compoundOrCredit` calls `AutoDeposit.AddDeposit` (`iotex-io/hermes` fork of the auto-compound contract) inside the rewarding epoch block. The call is issued from a system context (no external caller, no return value used besides the state transition), and `AddDeposit` cannot re-enter the rewarding protocol because rewarding namespace state is only mutated in-process, not via an EVM system call surface. However, `AutoDeposit` MUST be validated to have no external callback to arbitrary addresses on `AddDeposit` before the fork; the current source has none, but any future upgrade of that contract requires a re-review under IIP-59 assumptions.
-- **Vote weight correctness**: Uses the exact same `CalculateVoteWeight()` function as consensus vote counting. No separate calculation path that could diverge. LSD (contract-staking) holders are surfaced through `ContractStakingIndexer` setting per-holder `Owner` on their bucket, so they appear as ordinary voters in the weight view.
-- **Rounding attacks**: Total distributed ≤ total voter pool (guaranteed by integer division). Dust goes to delegate, not lost. Applied identically to block-reward split and epoch-reward split; when both apply to the same delegate, dust from each is credited independently (no cross-subsidy).
-- **Reward account overflow**: Uses `*big.Int` arithmetic — no overflow possible.
-- **Denial of service**: The per-epoch iteration is bounded by total bucket count (~40,000 across all delegates). Execution time is O(N) in the number of buckets, which is already bounded by the staking protocol. Contract reads at `PutPollResult` add O(top-N) EVM calls (~24-100/epoch); `compoundOrCredit` adds O(voter-count) EVM calls (~10k-50k/epoch, one-time per epoch). Both are dominated by the existing rewarding loop's cost.
-- **Pending pool integrity**: Block rewards routed to the per-delegate pending pool are drained exactly once at epoch end — either by the top-N loop (§3.2) or by the trailing orphan-drain loop (§3.3). No path leaves a pool entry across epoch boundaries; nodes cannot silently confiscate a block-producing delegate's reward. Snapshot writes and pool writes both go through the standard state manager, so restart safety and Fork/Snapshot/Revert semantics apply automatically. The frozen `blockCommissionRate` in the pool entry protects orphans (delegates who dropped out of top-N) from having their split retroactively re-priced.
-- **`DelegateDistributed` log payload bound**: The per-delegate batched log carries `voters[]` + `amounts[]` sized by the delegate's active voter count. Worst case at fork (~5,000 voters on the largest delegate, 21 bytes/addr + 8 bytes/amount) ≈ 145 KB per log — under the 256 KB soft cap for receipt logs. If a delegate ever exceeds `MaxLogPayloadBytes` (constant, default 200 KB), the emitter MUST split the batch into multiple `DelegateDistributed{seq, seqTotal, ...}` logs deterministically ordered by voter address. Off-chain verifiers concatenate by `seq` and check `sum(amounts) + commissionAmount` against the total per-delegate epoch payout.
-- **Snapshot determinism**: The voter weight snapshot (§7.5), the commission-rate snapshot (§3.4), and the opt-in snapshot are all written per-candidate as proto blobs with deterministic field ordering. The "skip if bytes unchanged" write path is safe only because each encoding is a pure function of the sorted logical inputs; any implementation that changes the sort key or adds non-deterministic fields (e.g. iteration order of a map, wall-clock timestamp) would break this invariant and cause block-hash divergence.
-- **Contract-read determinism**: `evm.SimulateExecution` against `DelegateProfile` and `AutoDeposit` is deterministic under a fixed state root — the same state height always yields the same return bytes. However, the calls MUST run against the pre-`PutPollResult` state root, not a live mid-block state; otherwise a rate change late in the last block of an epoch could be picked up inconsistently across replays. `SnapshotCommissionRates` runs at the beginning of `PutPollResult`, before any candidate list mutation, guaranteeing a stable read point.
+### Consensus safety
 
-## References
+The pipeline is fully deterministic. All inputs are on-chain state:
+staking snapshot, cursor, pending pool balances, genesis parameters.
+There is no external oracle, timer, or unbounded loop.
 
-- [IIP-58: ioSwarm — Decentralized Execution Layer](https://github.com/iotexproject/iips/blob/main/iip-58.md)
-- [Hermes v1 Source](https://github.com/iotexproject/iotex-hermes) — the centralized service being replaced
-- [F1 Fee Distribution (Cosmos SDK)](https://drops.dagstuhl.de/storage/01oasics/oasics-vol071-tokenomics2019/OASIcs.Tokenomics.2019.10/OASIcs.Tokenomics.2019.10.pdf) — related reward distribution algorithm
-- [IoTeX Staking Protocol](https://github.com/iotexproject/iotex-core/tree/master/action/protocol/staking) — existing on-chain staking state
-- [IoTeX Rewarding Protocol](https://github.com/iotexproject/iotex-core/tree/master/action/protocol/rewarding) — existing reward distribution
+The bounded-work guarantee (§6.4) is enforced by the two per-block caps.
+A malicious block producer cannot cause other validators to overrun the
+2.5 s budget: `runVoterDistributionChunk` respects the caps regardless
+of who produced the block.
 
-## Copyright
+### Fund conservation
 
-Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
+`unclaimedBalance ≤ totalBalance` holds throughout:
+
+- Block reward voter share moves `voterShare` from `fund.unclaimedBalance`
+  into the pending pool, which itself is a subset of
+  `fund.totalBalance`.
+- Epoch reward voter share moves the same way.
+- Phase B decrements the pending pool and either credits an unclaimed
+  balance (Credit route) or transfers to a native bucket (Compound
+  route). No new liability is created.
+- The overrun handoff (§10.2) does not double-count: residue in the
+  pending pool is not re-decremented from the fund; it is absorbed
+  into the new cursor's per-delegate `VoterAmountFrozen`.
+
+### Reorg safety
+
+The cursor is written via the standard state manager (in the same
+namespace as the rewarding fund) and is subject to standard state root
+inclusion. A reorg that reverts Phase A also reverts the cursor
+materialization; a reorg that reverts a Phase B block reverts that
+chunk's payment and cursor advance. No manual reconciliation is
+required.
+
+### DoS surface
+
+The `SetVoterRewardOptIn` action costs gas per invocation and modifies
+one candidate record. The candidate registration gas schedule already
+covers similar mutations. No new DoS vector is introduced.
+
+`GrantVoterRewardChunk` is a protocol-generated system action; users
+cannot submit it, so gas cost and rate limiting are not applicable.
+
+### Compound-contract trust
+
+The `AutoDeposit` contract remains third-party (deployed by the operator
+who runs Hermes today) but its failure only downgrades voters to Credit
+route via per-item degrade (§8.2). A malicious or bricked `AutoDeposit`
+cannot halt or corrupt reward distribution.
+
+### Snapshot integrity
+
+`snap.Entries` is signed into the state root at era boundary via the
+same state-tree machinery as staking buckets. A validator that produces
+an incorrect snapshot fails root verification at the next block; the
+chain halts on that peer only.
+
+## Reference Implementation
+
+The implementation lives across the following Go packages in
+`iotexproject/iotex-core`:
+
+- **`action/protocol/staking/`** — snapshot capture, `snap.Entries`
+  materialization, `PollSnapshotFor`, opt-in flag on `Candidate`,
+  `SetVoterRewardOptIn` action handler.
+- **`action/protocol/rewarding/`** — Phase A (`GrantEpochReward`),
+  Phase B (`GrantVoterRewardChunk`), cursor state (`epoch_drain_cursor.go`),
+  per-delegate epoch split (`splitDelegateEpochReward`), windowed voter
+  payout (`distributeVoterOnly`), pending pool
+  (`pending_block_reward.go`), post-system-action emission
+  (`CreatePostSystemActions`).
+- **`action/protocol/rewarding/rewardingpb/`** — `EpochDrainCursor`
+  and `EpochDrainDelegateWork` messages.
+- **`action/protocol/rewarding/distributedlog/`** —
+  `DelegateDistributed` ABI, event struct, encoder.
+- **`blockchain/genesis/genesis.go`** — `EpochsPerRewardEra`,
+  `VoterBudgetPerBlock`, `CompoundBatchSize`.
+- **`action/protocol/context/context.go`** —
+  `featureCtx.NoVoterRewardDistribution`.
+
+The rollout is decomposed into PRs `iip-59/pr-1` through
+`iip-59/pr-6` (mainnet activation). PR 6 is the activation PR and
+must include:
+
+- The `SetVoterRewardOptIn` action handler (§2.2).
+- The overrun graceful-degrade path (§10.2), replacing the current
+  hard-fail check at Phase A entry.
+- The `EPOCH_DRAIN_OVERRUN` receipt log (§10.3).
+
+## Appendix A: Change History
+
+### v3 (this revision, 2026-07-21)
+
+Complete restructure. All specification content is rewritten to match
+the shipped implementation as of PRs 1 through 5.5b, with three
+forward-looking sections describing planned changes for PR 6
+(activation):
+
+- **§2.2 `SetVoterRewardOptIn`** — action is specified; implementation
+  is a PR 6 deliverable.
+- **§10.2 Graceful degrade on cursor-live-at-Phase-A** — replaces the
+  hard-fail present in the current codebase. Implementation is a PR 6
+  deliverable.
+- **§10.3 `EPOCH_DRAIN_OVERRUN` receipt log** — added as the
+  observability primitive for overrun. Implementation is a PR 6
+  deliverable.
+
+Structural changes from v2:
+
+- Consolidated v1 §§1–7 and v2 amendment §§8.1–8.8 into a single
+  specification. The two-tier "here is what v1 said, here is how v2
+  overrides" reading burden is removed.
+- Cursor structure fully specified using the actual proto names
+  (`EpochDrainCursor`, `EpochDrainDelegateWork`) rather than the v2
+  placeholders (`VoterRewardEraCursor`).
+- Action name specified as `GrantVoterRewardChunk` rather than the v2
+  placeholder `GrantEraVoterReward`.
+- Log name specified as `DelegateDistributed` (per chunk) rather than
+  the v2 placeholder `EraVoterCredited` (per era).
+- Log `TotalVoterPool` semantic explicitly redefined as chunk-scoped
+  sum. Off-chain reassembly rule spelled out (§7.3).
+- Phase A no longer folds commission through the pool; it pays
+  commission immediately and credits only the voter share to the
+  pool. This matches the v2 implementation and simplifies the fund
+  accounting.
+- Compound-sweep phase (v2 §8.8) removed. Compound is inline at
+  credit time.
+- Terminology section (§Terminology) added.
+- Reference implementation section (§Reference Implementation) added,
+  mapping specification sections to codebase directories.
+
+### v2 (amendment, 2025-11)
+
+Introduced era-based distribution. Superseded v1 §§3.2, 3.4 and the
+per-epoch log format. Introduced the cursor mechanism. See prior
+revision for the historical amendment text; all of its content is
+now folded into v3 above.
+
+### v1 (2026-03-20)
+
+Original submission. Proposed per-epoch distribution, single-block
+drain, `CompoundSweep` deferred phase, `SetVoterRewardOptIn` action.
+Superseded by v2 (per-epoch → per-era) and v3 (deferred compound → 
+inline compound; hard-fail → graceful degrade).
