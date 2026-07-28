@@ -40,9 +40,10 @@ The protocol performs distribution in five named stages:
    delegates enter a per-delegate pending pool, while delegate commission is
    paid immediately to the owner.
 2. **Settlement Initialization** - at a reward-era boundary, the protocol
-   freezes voter weights and creates a persistent settlement cursor.
+   freezes voter weights, derives one parent-hash-based settlement seed, and
+   creates a persistent settlement cursor.
 3. **Chunked Voter Distribution** - subsequent blocks pay at most
-   `VoterBudgetPerBlock` voters in deterministic order.
+   `VoterBudgetPerBlock` voters in deterministic circular order.
 4. **Settlement Finalization** - the last chunk resolves orphaned pools and
    deletes the cursor.
 5. **Overrun Recovery** - if a settlement reaches the next reward-era
@@ -106,6 +107,7 @@ time budget.
 | **Legacy reward mode** | Existing behavior in which the full reward is credited to the stored reward address's rewarding balance and must be claimed. |
 | **Pending voter pool** | Per-candidate balance containing voter portions not yet distributed. |
 | **Voter snapshot** | Frozen, address-sorted list of aggregated voter weights plus the delegate's profile rates. |
+| **Settlement seed** | Domain-separated hash that deterministically selects the circular starting offset for every delegate and voter list in one settlement. |
 | **Settlement cursor** | Persistent progress record for a multi-block voter distribution. |
 | **Direct payout** | Transfer from the rewarding protocol to the voter's primary account. No later claim is required. |
 | **Compound payout** | Transfer from the rewarding protocol to an eligible native staking bucket owned by the voter. |
@@ -261,7 +263,9 @@ delegate it is false, and the protocol skips the `DelegateProfile` and voter
 weight reads and stores no voter entries. For an on-chain delegate, `entries`
 contains one aggregated entry per voter and is sorted by voter address bytes in
 ascending order. The ordering is consensus-critical because the settlement
-cursor stores a numeric voter index.
+cursor stores numeric voter indexes. Settlement does not mutate this canonical
+snapshot order; it applies a frozen circular starting offset while traversing
+the list.
 
 The snapshot caches:
 
@@ -394,6 +398,7 @@ message EpochDrainDelegateWork {
   bytes snapshot_hash = 7;
   uint32 last_weighted_index = 8;
   bool has_weighted_entries = 9;
+  uint32 voter_start_index = 10;
 }
 
 message EpochDrainCursor {
@@ -401,20 +406,61 @@ message EpochDrainCursor {
   uint32 delegate_index = 2;
   repeated EpochDrainDelegateWork delegates = 3;
   uint32 voter_index = 4;
+  bytes settlement_seed = 5;
+  uint32 delegate_start_index = 6;
 }
 ```
+
+Initialization derives exactly one seed from consensus-visible data:
+
+```text
+settlementSeed = keccak256(
+    bytes("iip59.settlement-start.v1") ||
+    parentBlockHash[32] ||
+    uint64_be(targetEra)
+)
+R = uint256_be(settlementSeed)
+```
+
+`parentBlockHash` is the hash of the block immediately preceding the boundary
+block. `targetEra` is the boundary epoch number stored in the cursor. Every
+validator executing the boundary block therefore derives the same `R`.
+
+The protocol uses that single `R` for every circular starting offset:
+
+```text
+delegateStartIndex = R % delegateCount
+voterStartIndex[d] = R % voterCount[d]
+```
+
+Modulo is evaluated only for a non-empty list; an empty list has offset zero
+and creates no distributable work. The frozen delegate work list is first
+assembled in the existing epoch-reward candidate order, then persisted in
+circular traversal order beginning at `delegateStartIndex`. Each canonical,
+address-sorted voter snapshot remains unchanged; its work item records
+`voter_start_index` instead.
 
 The fields have the following meaning:
 
 - `target_era` is the boundary epoch number that initialized the settlement.
-- `delegate_index` identifies the next delegate work item.
-- `voter_index` identifies the next voter within that delegate's snapshot.
+- `settlement_seed` is the 32-byte value used for all list offsets.
+- `delegate_start_index` identifies the selected start in the original
+  canonical delegate list; `delegates` is stored in the resulting circular
+  order.
+- `delegate_index` identifies the next item in that persisted delegate order.
+- `voter_start_index` identifies the selected start in the canonical voter
+  snapshot.
+- `voter_index` is the next logical voter position in circular traversal. Its
+  physical snapshot index is
+  `(voter_start_index + voter_index) % voter_count`.
 - `voter_amount_frozen` is the pool balance allocated by this settlement.
 - `voter_amount_distributed` is the amount already paid from that frozen
   balance.
 - `reward_address` and `epoch_commission` preserve the routing and log values
   from initialization.
-- the remaining metadata preserves the frozen voter allocation inputs.
+- `last_weighted_index` is the logical index of the final positive-weight
+  voter in circular traversal; the remaining metadata preserves the frozen
+  voter allocation inputs.
 
 The cursor is a singleton. Its presence means a settlement is active. Its
 delegate work list is immutable except for distribution progress.
@@ -429,10 +475,10 @@ While a cursor exists, every block that is not the last block of an epoch
 includes a protocol-generated `VoterRewardChunk` system action. Epoch-final
 blocks run `GrantEpochReward` and do not also run a voter chunk.
 
-One action walks the cursor in candidate and voter order. Across all delegates
-touched by the action, it processes no more than `VoterBudgetPerBlock` voter
-entries. A value of zero means unbounded. There is no separate delegate count
-or compound count limit.
+One action walks the cursor in the frozen circular delegate and voter orders.
+Across all delegates touched by the action, it processes no more than
+`VoterBudgetPerBlock` voter entries. A value of zero means unbounded. There is
+no separate delegate count or compound count limit.
 
 If the budget ends inside a delegate, `delegate_index` stays on that delegate
 and `voter_index` advances to the next voter. If it ends exactly at a delegate
@@ -440,7 +486,8 @@ boundary, the next block starts with the next delegate.
 
 #### 8.1 Voter allocation
 
-For every positive-weight voter other than the final positive-weight voter:
+For every positive-weight voter other than the final positive-weight voter in
+the frozen circular traversal:
 
 ```text
 share[i] = floor(voterAmountFrozen * weight[i] / totalWeight)
@@ -452,9 +499,10 @@ The final positive-weight voter receives:
 share[last] = voterAmountFrozen - sum(previous shares)
 ```
 
-Zero-weight entries receive zero. This rule guarantees that all chunks for a
-completed delegate sum exactly to `voterAmountFrozen`, independent of the
-chunk size.
+Zero-weight entries receive zero. The final positive-weight voter is selected
+after applying `voter_start_index`, so division dust follows the same circular
+order. This rule guarantees that all chunks for a completed delegate sum
+exactly to `voterAmountFrozen`, independent of the chunk size.
 
 The cursor's `total_weight`, `last_weighted_index`, and cumulative
 `voter_amount_distributed` make each continuation proportional to the current
@@ -600,10 +648,11 @@ event DelegateDistributed(
 - `compoundBucketIds[i] > 0` is the actual native bucket that received the
   compound payout.
 
-A delegate may emit multiple events. Their block order and voter arrays
-reconstruct cursor order, and their `totalVoterPool` values sum to the frozen
-amount when the delegate completes. `snapshotHash` remains stable across all
-chunks using the same voter snapshot.
+A delegate may emit multiple events. Their block order and voter arrays,
+together with the cursor's frozen start indexes, reconstruct circular cursor
+order, and their `totalVoterPool` values sum to the frozen amount when the
+delegate completes. `snapshotHash` remains stable across all chunks using the
+same voter snapshot.
 
 #### 11.2 Cursor progress
 
@@ -667,6 +716,11 @@ epochDrainCursor()
 voterRewardSnapshot(address candidateId)
 voterRewardAddress(address candidateId)
 ```
+
+The `epochDrainCursor()` Web3 result includes `settlementSeed`,
+`delegateStartIndex`, and a `voterStartIndices` array parallel to the returned
+candidate IDs. Native `ReadState` returns the same fields in the cursor
+protobuf. This makes historical circular order independently reconstructable.
 
 Historical verification combines these state reads with block receipts,
 `DelegateDistributed` events, and transaction logs.
@@ -756,6 +810,18 @@ One global voter budget bounds that work directly. A second delegate or
 compound limit can reduce useful throughput without providing a clearer safety
 bound.
 
+### Rotated settlement starts
+
+A fixed canonical start would repeatedly favor the same head of the delegate
+and voter lists whenever a settlement overruns its era. Selecting a circular
+start from the previous block hash changes which entries are processed first
+without changing membership, weights, the proportional allocation rule, or
+total fund movement. Because exact conservation assigns integer-division dust
+to the final positive-weight voter in traversal order, rotation can change the
+recipient of that bounded remainder. Reusing one seed for all lists keeps the
+state compact and makes the entire traversal straightforward to reproduce from
+archive state.
+
 ### Direct account payout
 
 Writing direct rewards to the voter account completes the payment in one state
@@ -806,10 +872,22 @@ solely for IIP-59.
 
 ### Determinism and replay
 
-All allocation inputs are frozen in state, ordered canonically, and committed
-to the state root. Cursor, account, pool, and bucket changes are part of the
-same block state transition. A reorganization reverts both a payout and its
-cursor advance.
+All allocation inputs and circular offsets are frozen in state and committed
+to the state root. The settlement seed depends only on the prior block hash and
+the boundary epoch, both identical for every validator executing a given
+boundary block. Cursor, account, pool, and bucket changes are part of the same
+block state transition. A reorganization changes the parent hash but also
+reverts the seed, payout, and cursor advance together before deterministic
+re-execution.
+
+The settlement seed is not a source of cryptographic randomness and MUST NOT
+be used for reward eligibility, weight, commission, or total allocation. A
+producer near the boundary may have limited influence over a candidate parent
+block hash, but that influence changes only service order and which final
+positive-weight voter receives the integer-division remainder. It cannot change
+list membership, frozen weight, commission, or total distributed value. For
+`N` positive-weight voters, the remainder added beyond ordinary floor
+allocation is strictly less than `N` rau.
 
 ### Fund conservation
 
