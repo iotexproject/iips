@@ -7,16 +7,18 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-20
-Updated: 2026-07-27
+Updated: 2026-07-28
 ```
 
 ## Simple Summary
 
-Replace the Hermes off-chain voter reward service with a protocol-native,
-deterministic reward pipeline. After activation, every delegate's block and
-epoch rewards are split between the delegate and its voters. Voter rewards
-accumulate in per-delegate pools and are distributed in bounded chunks to
-voter accounts or eligible compound staking buckets.
+Replace Hermes-managed off-chain voter rewards with a protocol-native,
+deterministic reward pipeline. At activation, delegates whose existing reward
+address is one of the configured Hermes vaults migrate automatically. Other
+delegates retain legacy reward handling unless their owner explicitly enables
+on-chain distribution. For migrated delegates, voter rewards accumulate in
+per-delegate pools and are distributed in bounded chunks to voter accounts or
+eligible compound staking buckets.
 
 ## Abstract
 
@@ -24,16 +26,19 @@ IoTeX delegates currently rely on Hermes to claim protocol rewards, apply
 delegate-configured reward portions, and distribute the voter portion.
 IIP-59 moves that work into consensus.
 
-At activation, all delegates switch to on-chain voter reward distribution.
-There is no delegate opt-in. The existing `DelegateProfile` contract remains
-the source of the block-reward and epoch-reward voter portions. If a delegate
-has no complete registered profile, both streams default to 100% for voters.
+At activation, delegates using either configured Hermes vault as their legacy
+reward address switch to on-chain voter reward distribution. Delegates using
+another reward address remain on the legacy claim path and may switch later
+through a one-way, owner-authorized action. The existing `DelegateProfile`
+contract remains the source of block-reward and epoch-reward voter portions
+for on-chain delegates. If a delegate has no complete registered profile,
+both streams default to 100% delegate commission, paid directly to its owner.
 
 The protocol performs distribution in five named stages:
 
-1. **Reward Accumulation** - block and epoch voter portions enter a
-   per-delegate pending pool, while delegate commission is credited
-   immediately.
+1. **Reward Accumulation** - block and epoch voter portions for on-chain
+   delegates enter a per-delegate pending pool, while delegate commission is
+   paid immediately to the owner.
 2. **Settlement Initialization** - at a reward-era boundary, the protocol
    freezes voter weights and creates a persistent settlement cursor.
 3. **Chunked Voter Distribution** - subsequent blocks pay at most
@@ -68,7 +73,10 @@ time budget.
 
 ## Goals
 
-- Distribute every delegate's voter rewards under consensus after activation.
+- Migrate rewards previously managed through the configured Hermes vaults to
+  consensus at activation.
+- Allow other delegates to enter on-chain distribution explicitly without
+  changing their legacy behavior by default.
 - Preserve the existing `DelegateProfile` reward portions.
 - Include voting weight from protocol-supported native and contract staking.
 - Support direct payout and native-bucket compounding.
@@ -84,7 +92,8 @@ time budget.
 - Changing productivity probation, unproductive-delegate slashing, foundation
   bonuses, or priority-tip economics.
 - Adding compound support for contract-staking buckets.
-- Preserving Hermes as an alternative path after activation.
+- Forcing delegates not using a configured Hermes vault to migrate.
+- Replacing the legacy rewarding claim path for delegates that do not migrate.
 
 ## Terminology
 
@@ -93,7 +102,8 @@ time budget.
 | **Candidate identity** | Stable candidate identifier used as the key for IIP-59 state. It is not the operator address, which may change. |
 | **Reward era** | A configured run of `EpochsPerRewardEra` epochs between voter settlements. |
 | **Era boundary** | An epoch `E` for which `E > 0` and `E % EpochsPerRewardEra == 0`. |
-| **Effective reward address** | Address that receives delegate commission and other delegate-directed rewards after activation. |
+| **On-chain reward mode** | Protocol-native split and voter distribution. Delegate-directed rewards are paid directly to the current owner. |
+| **Legacy reward mode** | Existing behavior in which the full reward is credited to the stored reward address's rewarding balance and must be claimed. |
 | **Pending voter pool** | Per-candidate balance containing voter portions not yet distributed. |
 | **Voter snapshot** | Frozen, address-sorted list of aggregated voter weights plus the delegate's profile rates. |
 | **Settlement cursor** | Persistent progress record for a multi-block voter distribution. |
@@ -102,55 +112,95 @@ time budget.
 
 ## Specification
 
-### 1. Activation and Universal Transition
+### 1. Activation and Migration Eligibility
 
 IIP-59 is activated by a hardfork height. Before the activation height, the
-legacy rewarding behavior is unchanged. At and after the activation height:
+legacy rewarding behavior is unchanged. Candidate state contains two migration
+markers:
 
-- every delegate uses protocol-native voter reward distribution;
-- no opt-in or opt-out state or action exists;
-- Hermes MUST stop distributing newly generated delegate voter rewards;
-- registered `DelegateProfile` portions are enforced by the protocol; and
-- an unregistered or incomplete profile defaults to zero delegate commission,
-  meaning 100% of both base reward streams belongs to voters.
+```proto
+message Candidate {
+  // Existing fields omitted.
+  bool voterRewardOnchainOptIn = 11;
+  bool rewardAddressUpdated = 12;
+}
+```
+
+At and after activation, on-chain reward mode is enabled when:
+
+```text
+candidate.voterRewardOnchainOptIn ||
+(
+    !candidate.rewardAddressUpdated &&
+    candidate.rewardAddress in genesis.hermesRewardVaultAddresses
+)
+```
+
+`hermesRewardVaultAddresses` identifies the legacy vaults from which Hermes
+distributed voter rewards. The default list contains:
+
+```text
+io19604a05s2p3mecam2zz7d27hcr6ndyw80wvkmh
+io12mgttmfa2ffn9uqvn0yn37f4nz43d248l2ga85
+```
+
+The automatic rule applies only to reward addresses inherited from before the
+fork. A candidate registered after activation, or a candidate that explicitly
+updates its reward address after activation, has `rewardAddressUpdated = true`
+and is not automatically migrated merely because that address equals a Hermes
+vault.
+
+A candidate owner may submit `SetVoterRewardOptIn(candidateIdentifier, true)`
+after activation. The action is owner-only, idempotent, and one-way. An action
+with `optIn = false` is invalid, so a migrated candidate cannot return to the
+legacy path. If an automatically migrated candidate later updates its reward
+address, the protocol first records `voterRewardOnchainOptIn = true` to preserve
+its current mode.
+
+Migration eligibility is evaluated when the protocol writes the next poll
+snapshot. Consequently, an explicit opt-in takes economic effect with that
+snapshot rather than rewriting rewards already governed by the current one.
+
+For an on-chain delegate, registered `DelegateProfile` portions are enforced
+by the protocol. An unregistered, incomplete, malformed, or unreadable profile
+defaults to 100% delegate commission and zero voter portion. A delegate that
+does not meet either migration condition remains entirely on the legacy path;
+its profile and voter snapshot are not used.
 
 The feature context exposes the inverse gate
 `NoVoterRewardDistribution`. The IIP-59 path is active when that value is
 `false`.
 
-### 2. Effective Reward Address
+### 2. Reward Destinations
 
-The legacy candidate reward address is not automatically reused after
-activation. Candidate state contains an additional marker:
+The destination depends on the frozen reward mode:
 
-```proto
-message Candidate {
-  // Existing fields omitted.
-  bool rewardAddressUpdated = 12;
-}
-```
+- **On-chain mode:** all delegate-directed rewards are paid immediately to the
+  candidate's current owner account. They do not create a rewarding
+  `unclaimedBalance` and require no claim action. The stored legacy reward
+  address is not used for newly generated rewards.
+- **Legacy mode:** the full block reward, priority tip, epoch reward, and
+  foundation bonus are credited to the candidate's stored reward address using
+  the existing rewarding balance. The recipient must submit the existing claim
+  action to move those funds to its account.
 
-The effective post-activation reward address is:
+An ownership change therefore changes the direct destination for an on-chain
+delegate. A reward-address update changes the destination only for a delegate
+that remains in legacy mode. Mode selection itself is frozen in each
+`CandidatePollSnapshot`, so a configuration change does not alter an active
+reward era or settlement.
+
+Every non-zero direct delegate payout emits a transaction log with:
 
 ```text
-if candidate.rewardAddressUpdated:
-    effectiveRewardAddress = candidate.rewardAddress
-else:
-    effectiveRewardAddress = candidate.ownerAddress
+type      = CLAIM_FROM_REWARDING_FUND
+sender    = RewardingPoolAddr
+recipient = candidate owner
+amount    = direct delegate reward
 ```
 
-For candidates that already exist at activation, `rewardAddressUpdated` is
-false, so their effective reward address follows the current owner and the
-legacy reward address is ignored. A post-activation candidate registration
-marks its supplied reward address as explicit. A post-activation
-`CandidateUpdate` that supplies a reward address also sets the marker to true.
-
-If ownership changes while the marker is false, the effective address follows
-the new owner. Once an explicit reward address has been set, it remains the
-effective address until another candidate update changes it.
-
-The marker distinguishes migration state from a deliberately configured
-address. It does not reintroduce reward-distribution opt-in.
+The log describes an immediate protocol outflow and does not represent a claim
+transaction submitted by the owner.
 
 ### 3. Reward Portions from DelegateProfile
 
@@ -171,8 +221,8 @@ epochCommissionBps = 10000 - epochRewardPortion
 A profile is registered for IIP-59 only when both fields are present and
 valid. If either field is absent, a value is out of range, or a per-delegate
 profile read cannot be decoded, the snapshot records `registered = false` and
-both commission rates are zero. This fallback is deterministic and sends the
-full base reward streams to voters.
+both commission rates are `10000`. This fallback is deterministic and sends
+the full base reward streams directly to the candidate owner.
 
 Profile rates are frozen at the next era snapshot. A profile update does not
 change rewards already accumulating under the current snapshot.
@@ -197,6 +247,7 @@ message CandidatePollSnapshot {
   uint64 blockCommissionBasisPoints = 1;
   uint64 epochCommissionBasisPoints = 2;
   bool registered = 3;
+  bool onchainRewardEnabled = 4;
   repeated VoterWeightEntry entries = 5;
   bytes totalWeight = 6;
   bytes snapshotHash = 7;
@@ -205,9 +256,12 @@ message CandidatePollSnapshot {
 }
 ```
 
-`entries` contains one aggregated entry per voter and is sorted by voter
-address bytes in ascending order. The ordering is consensus-critical because
-the settlement cursor stores a numeric voter index.
+`onchainRewardEnabled` freezes mode selection for the reward era. For a legacy
+delegate it is false, and the protocol skips the `DelegateProfile` and voter
+weight reads and stores no voter entries. For an on-chain delegate, `entries`
+contains one aggregated entry per voter and is sorted by voter address bytes in
+ascending order. The ordering is consensus-critical because the settlement
+cursor stores a numeric voter index.
 
 The snapshot caches:
 
@@ -231,13 +285,14 @@ the allocation metadata once from that frozen list and stores it in the cursor,
 so continuation blocks do not recompute total weight or rescan preceding voter
 weights.
 
-If no usable voter-weight view or no positive voter weight is available, the
-delegate's voter pool remains pending. It is not redirected to delegate
-commission.
+If no usable voter-weight view or no positive voter weight is available for an
+on-chain delegate, its voter pool remains pending. It is not redirected to
+delegate commission.
 
 ### 5. Reward Split
 
-For a non-negative reward amount and a commission rate in basis points:
+For an on-chain delegate and a non-negative reward amount with a commission
+rate in basis points:
 
 ```text
 commission = floor(amount * commissionBps / 10000)
@@ -246,55 +301,74 @@ voterShare = amount - commission
 
 Rounding therefore favors voters. The delegate never receives division dust.
 
-The split rate comes from the latest frozen voter snapshot. If no snapshot is
-available after activation, the commission rate is zero.
+The split rate comes from the latest frozen voter snapshot. If no usable
+profile rate is available, the commission rate is `10000`. A legacy delegate
+does not execute this split: its complete reward follows the legacy path.
 
 ### 6. Reward Accumulation
 
 #### 6.1 Base block reward
 
 On every block after activation, `GrantBlockReward` resolves the producer by
-candidate identity and reads its effective reward address.
+candidate identity and reads its frozen reward mode.
 
 The base block reward is split as follows:
 
 ```text
-commission -> effective reward address's rewarding account
+commission -> current owner account immediately
 voterShare -> pending voter pool[candidate identity]
 ```
 
-Priority tips are fee income and are credited in full to the effective reward
-address. They are not included in the voter split.
+Priority tips are fee income and are paid in full directly to the owner. They
+are not included in the voter split.
 
-The `BLOCK_REWARD` reward log reports the immediate block commission. A zero
-commission may produce no reward log. The pending voter share is later
-attested by `DelegateDistributed` events.
+For a legacy delegate:
+
+```text
+base block reward + priority tip -> stored reward address's rewarding balance
+```
+
+The legacy recipient must claim this balance using the existing rewarding
+action.
+
+For an on-chain delegate, the `BLOCK_REWARD` reward log reports the immediate
+block commission and a zero commission may produce no reward log. For a legacy
+delegate, it reports the full amount credited to the rewarding balance. The
+on-chain pending voter share is later attested by `DelegateDistributed` events.
 
 #### 6.2 Epoch reward
 
 On the last block of every epoch, `GrantEpochReward` first applies the existing
 recipient selection, vote-weight, exemption, productivity, probation, and
-slashing rules. Each resulting delegate epoch amount is then split:
+slashing rules. Each resulting on-chain delegate epoch amount is then split:
 
 ```text
-commission -> effective reward address's rewarding account
+commission -> current owner account immediately
 voterShare -> pending voter pool[candidate identity]
 ```
 
-The voter share accumulates every epoch, not only at era boundaries. The
-`EPOCH_REWARD` reward log reports the immediate epoch commission.
+The voter share accumulates every epoch, not only at era boundaries. For an
+on-chain delegate, the `EPOCH_REWARD` reward log reports the immediate epoch
+commission. For a legacy delegate, it reports the full epoch amount credited to
+the rewarding balance.
+
+For a legacy delegate, the complete post-slashing epoch amount is credited to
+the stored reward address's rewarding balance and remains claimable through the
+existing action. No voter pending pool is created.
 
 Unproductive-delegate slashing remains independent of IIP-59. Slashed value
 moves from the staking bucket pool back to the rewarding pool, and the existing
 probation-adjusted weight affects the epoch amount before the commission split.
-Foundation bonuses keep their existing calculation and log format and are
-credited to the effective reward address after activation.
+Foundation bonuses keep their existing calculation and log format. They are
+paid directly to the owner for an on-chain delegate and credited to the stored
+reward address's rewarding balance for a legacy delegate.
 
 #### 6.3 Pending voter pool
 
-Each pool is stored in the rewarding namespace under a key formed from a fixed
-prefix and the candidate identity. A separate sorted identity index permits
-deterministic enumeration without scanning the namespace.
+Only on-chain delegates have pending voter pools. Each pool is stored in the
+rewarding namespace under a key formed from a fixed prefix and the candidate
+identity. A separate sorted identity index permits deterministic enumeration
+without scanning the namespace.
 
 The pool is part of rewarding-fund accounting but is not an address-level
 unclaimed balance. It cannot be withdrawn through the normal rewarding claim
@@ -306,8 +380,8 @@ frozen amount is being distributed.
 Settlement initialization runs in `GrantEpochReward` when the current epoch is
 an era boundary.
 
-For each currently rewarded candidate whose pending voter pool is non-zero,
-the protocol creates one frozen work item:
+For each currently rewarded on-chain candidate whose pending voter pool is
+non-zero, the protocol creates one frozen work item:
 
 ```proto
 message EpochDrainDelegateWork {
@@ -457,8 +531,8 @@ split.
 
 For each orphaned pool:
 
-1. if candidate state still exists, credit the full pool to the candidate's
-   effective reward address;
+1. if candidate state still exists, pay the full pool directly to the
+   candidate's current owner;
 2. if candidate state no longer exists, return the amount to the rewarding
    fund's available balance; and
 3. delete the pool and its index entry.
@@ -515,7 +589,7 @@ event DelegateDistributed(
 
 - `epoch` is the epoch containing the chunk block.
 - `delegate` is the candidate identity.
-- `rewardAddr` is the effective address frozen at settlement initialization.
+- `rewardAddr` is the candidate owner frozen at settlement initialization.
 - `totalCommission` is the epoch commission paid by the boundary
   `GrantEpochReward` for this cursor item. It excludes block commission and
   commissions paid in earlier epochs of the era.
@@ -554,6 +628,19 @@ amount = live pending-pool residue
 
 The event is emitted before the new boundary epoch's per-delegate reward logs.
 
+#### 11.4 Explicit opt-in event
+
+A successful explicit opt-in emits the native staking receipt event:
+
+```solidity
+event VoterRewardOptInSet(
+    bytes32 indexed candidateIdentifier,
+    bool optIn
+);
+```
+
+`optIn` is always true for a successful action.
+
 ### 12. State Access
 
 Archive nodes that provide historical IIP-59 verification MUST configure
@@ -567,8 +654,8 @@ The rewarding protocol exposes these native `ReadState` methods:
 | `PendingBlockRewardPool(candidateID)` | Current pending voter amount for one candidate. |
 | `PendingBlockRewardPoolIndex()` | Sorted candidate identities with pool entries. |
 | `EpochDrainCursor()` | Current cursor and all frozen work items, or an empty cursor. |
-| `VoterRewardSnapshot(candidateID)` | Frozen profile rates, voter weights, total weight, and snapshot hash. |
-| `VoterRewardAddress(candidateID)` | Effective reward address and whether it was explicitly set after activation. |
+| `VoterRewardSnapshot(candidateID)` | Frozen mode, profile rates, voter weights, total weight, and snapshot hash. |
+| `VoterRewardAddress(candidateID)` | Effective destination under the frozen mode: current owner in on-chain mode or stored reward address in legacy mode, plus the reward-address update marker. |
 
 Equivalent Web3 read methods are available through the rewarding protocol
 state interface:
@@ -592,6 +679,7 @@ The following network configuration is consensus-critical:
 |---|---:|---|
 | `EpochsPerRewardEra` | 24 | Number of epochs between settlement initializations. |
 | `VoterBudgetPerBlock` | 2000 | Maximum voter entries processed by one chunk action; zero means unbounded. |
+| `HermesRewardVaultAddresses` | two legacy Hermes vaults | Reward addresses whose pre-fork delegates migrate automatically. |
 | `DelegateProfileContractAddress` | network-specific | Contract containing per-delegate voter portions. |
 | `AutoDepositContractAddress` | network-specific | Contract containing per-voter compound preferences. |
 
@@ -616,13 +704,13 @@ Failures are handled according to their scope:
 
 | Condition | Required behavior |
 |---|---|
-| Missing, partial, malformed, or unreadable DelegateProfile entry | Mark that profile unregistered for the snapshot and use 100% voter share. |
+| Missing, partial, malformed, or unreadable DelegateProfile entry | Mark that profile unregistered for the snapshot and pay 100% directly to the owner. |
 | No usable voter snapshot or no positive total weight | Keep the pool pending and retry in a future era. |
 | Snapshot hash changes after cursor initialization | Skip the stale work item and keep its pool pending. |
 | AutoDeposit lookup fails | Pay that voter directly. |
 | Bucket is missing, unreadable, contract-based, not owned by voter, not auto-staked, or unstaked | Pay that voter directly. |
 | Previous cursor survives to the next era boundary | Execute Overrun Recovery. |
-| Candidate pool becomes orphaned but candidate state exists | Credit the effective reward address. |
+| Candidate pool becomes orphaned but candidate state exists | Pay the candidate owner directly. |
 | Candidate state for an orphaned pool is absent | Return the amount to rewarding available balance. |
 | Invalid persisted state, account write failure, staking deposit mutation failure, or log encoding failure | Fail the state transition; normal block validation and rollback apply. |
 
@@ -631,13 +719,22 @@ MUST NOT depend on an external RPC service or wall-clock result.
 
 ## Rationale
 
-### Universal activation
+### Hermes-targeted migration and one-way opt-in
 
-A protocol hardfork should have one reward rule. Per-delegate opt-in would
-retain two accounting paths, require Hermes to remain active, and make reward
-behavior depend on mutable migration state. Universal activation removes that
-ambiguity. The all-to-voters default also prevents an unregistered delegate
-from receiving voter funds merely because it did not configure a profile.
+The automatic migration matches the existing operational boundary: delegates
+whose rewards already flow through the configured Hermes vaults are the ones
+whose voter distribution Hermes performs. Delegates that manage rewards
+independently keep their established address and claim workflow, avoiding an
+unrequested economic or operational change at the fork.
+
+The owner-only opt-in lets a legacy delegate adopt protocol-native distribution
+later. Making it one-way prevents accrued pending pools and frozen settlements
+from being stranded by a return to legacy mode. Freezing the effective mode in
+the poll snapshot removes ambiguity during a multi-block settlement.
+
+The all-to-owner profile fallback avoids assigning a voter portion that the
+delegate never configured. It is deterministic, preserves funds, and allows
+the delegate to register valid portions for a later reward era.
 
 ### Candidate identity as the state key
 
@@ -673,26 +770,33 @@ bucket, allowing auditors to verify both the decision and the staking inflow.
 
 ### Frozen inputs with live pools
 
-Voter weights, profile rates, reward address, and the settlement amount are
-frozen so all validators reproduce the same allocation across multiple blocks.
-The live pool remains able to receive later rewards; those newer funds are
-unambiguously deferred to a future cursor.
+Reward mode, voter weights, profile rates, the settlement cursor's owner
+destination, and the settlement amount are frozen so all validators reproduce
+the same allocation across multiple blocks. The live pool remains able to
+receive later rewards; those newer funds are unambiguously deferred to a future
+cursor.
 
 ## Backward Compatibility
 
 Before activation, reward grants, reward addresses, claims, logs, and state are
 unchanged.
 
-Activation is intentionally not backward compatible for delegate reward
-operations:
+Activation changes reward operations only for automatically migrated or
+explicitly enabled delegates:
 
-- Hermes MUST stop distributing rewards generated after the fork.
-- The legacy reward address is ignored for migrated candidates until a new
-  reward address is explicitly set; the owner is the default.
-- Delegate rewarding balances receive only commission and existing
-  delegate-directed rewards, not the voter portion.
-- Direct voter rewards appear immediately in account balance.
+- Hermes MUST stop distributing rewards generated after the fork for
+  automatically migrated delegates.
+- Their stored legacy reward address no longer receives newly generated
+  rewards; delegate-directed rewards are paid directly to the current owner.
+- Their voter portions enter per-delegate pending pools rather than a delegate
+  rewarding balance.
+- Direct voter rewards appear immediately in account balances.
 - Compound voter rewards appear as native staking bucket deposits.
+
+Delegates outside the configured Hermes vault set retain their stored reward
+address, full rewarding balance accrual, and claim requirement. They enter the
+new behavior only after an owner-authorized opt-in action. Existing balances
+accrued before migration remain claimable and are not rewritten.
 
 Existing `DelegateProfile` and `AutoDeposit` contracts remain the configuration
 sources, so delegates and voters do not need new configuration transactions
@@ -734,9 +838,10 @@ set and has no additional IIP-59 cap. `VoterRewardChunk` is protocol-generated
 and cannot be submitted as an arbitrary user action. Networks MUST size the
 voter budget and era length using representative validation hardware.
 
-Snapshot construction and DelegateProfile reads occur only at era boundaries.
-The voter-weight view is maintained incrementally so boundary work does not
-need to rebuild weights from all historical buckets.
+Snapshot construction and DelegateProfile reads occur only at era boundaries
+and only for on-chain delegates. The voter-weight view is maintained
+incrementally so boundary work does not need to rebuild weights from all
+historical buckets.
 
 ### External contract state
 
@@ -756,8 +861,8 @@ guaranteed.
 The reference implementation is in
 [`iotexproject/iotex-core` PR #4953](https://github.com/iotexproject/iotex-core/pull/4953):
 
-- `action/protocol/staking/` maintains voter weights, freezes snapshots, and
-  resolves the effective reward address.
+- `action/protocol/staking/` maintains voter weights, resolves migration mode,
+  handles explicit opt-in, and freezes snapshots.
 - `action/protocol/poll/` invokes snapshot freezing at era-boundary poll
   updates.
 - `action/protocol/rewarding/` implements reward accumulation, cursor
