@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-20
-Updated: 2026-07-28
+Updated: 2026-07-29
 ```
 
 ## Simple Summary
@@ -705,6 +705,7 @@ The rewarding protocol exposes these native `ReadState` methods:
 | `EpochDrainCursor()` | Current cursor and all frozen work items, or an empty cursor. |
 | `VoterRewardSnapshot(candidateID)` | Frozen mode, profile rates, voter weights, total weight, and snapshot hash. |
 | `VoterRewardAddress(candidateID)` | Effective destination under the frozen mode: current owner in on-chain mode or stored reward address in legacy mode, plus the reward-address update marker. |
+| `VoterRewardStatus(candidateID, voterAddress)` | One voter's status, circular index, and exact reward amount in the active settlement. |
 
 Equivalent Web3 read methods are available through the rewarding protocol
 state interface:
@@ -715,6 +716,7 @@ pendingBlockRewardPoolIndex()
 epochDrainCursor()
 voterRewardSnapshot(address candidateId)
 voterRewardAddress(address candidateId)
+voterRewardStatus(address candidateId, address voter)
 ```
 
 The `epochDrainCursor()` Web3 result includes `settlementSeed`,
@@ -722,10 +724,59 @@ The `epochDrainCursor()` Web3 result includes `settlementSeed`,
 candidate IDs. Native `ReadState` returns the same fields in the cursor
 protobuf. This makes historical circular order independently reconstructable.
 
+`VoterRewardStatus` returns:
+
+```text
+targetEra
+status
+logicalVoterIndex
+voterStartIndex
+rewardAmount
+```
+
+`status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `NO_ACTIVE_SETTLEMENT` | No settlement cursor exists. |
+| `CANDIDATE_NOT_INCLUDED` | The candidate has no frozen work item in the active settlement. |
+| `VOTER_NOT_INCLUDED` | The voter is absent from that candidate's frozen snapshot. |
+| `WAITING` | The cursor has not processed this voter. |
+| `PROCESSED` | The cursor has passed this voter. A zero-weight or zero-share voter can be processed without receiving funds. |
+| `SNAPSHOT_UNAVAILABLE` | The frozen snapshot is missing, stale, or inconsistent with the cursor, so status cannot be derived safely. |
+
+`logicalVoterIndex` is the voter's position after applying the settlement's
+circular offset. `rewardAmount` is the exact amount assigned from the frozen
+voter pool, including any integer-division remainder assigned to the final
+positive-weight voter. The method reports only the active settlement. It does
+not retain a per-voter record after the cursor is deleted, and `PROCESSED` does
+not identify whether the payout was direct or compounded. Receipt events are
+the source for the executed destination.
+
 Historical verification combines these state reads with block receipts,
 `DelegateDistributed` events, and transaction logs.
 
-### 13. Genesis Parameters
+### 13. Voter Preparation
+
+Voters who want direct account payouts do not need to take any action. After a
+successful settlement, the reward is already in the voter's primary account
+and does not require a rewarding-fund claim.
+
+Voters who want automatic compounding SHOULD register an eligible native
+staking bucket in the existing `AutoDeposit` contract before their payout is
+processed. The bucket must be owned by the voter, active,
+auto-staked, and not unstaked. Contract-staking votes are included in reward
+weight, but contract buckets are not eligible compound destinations; those
+rewards are paid directly to the primary account.
+
+The legacy `ForwardRegistration` flow is not part of IIP-59 and is not
+migrated. Existing valid `AutoDeposit` registrations remain effective without
+a new transaction. During an active settlement, a voter can use
+`VoterRewardStatus` to check progress. After processing, the voter can verify
+the direct account balance or native bucket deposit and use indexed
+`DelegateDistributed` events for historical details.
+
+### 14. Genesis Parameters
 
 The following network configuration is consensus-critical:
 
@@ -746,13 +797,22 @@ block is reserved for epoch rewards. A bounded configuration should satisfy:
 
 ```text
 VoterBudgetPerBlock * availableContinuationBlocks
-    >= expected voter entries per settlement * safety factor
+    >= expected (candidate, voter) entries per settlement * safety factor
 ```
+
+Capacity MUST be estimated from the sum of voter-list lengths across all
+settled candidates, not from the number of distinct voter addresses. Operators
+SHOULD include headroom for voter growth and monitor cursor age, remaining
+entries, and `EPOCH_DRAIN_OVERRUN` logs. With the defaults and `B = 360`, the
+nominal capacity is approximately `24 * 359 * 2000 = 17,232,000`
+candidate-voter entries per era. Networks MUST benchmark representative
+validation hardware before activation; the nominal count is not a substitute
+for block mint and validation latency measurements.
 
 If this capacity is exceeded, Overrun Recovery preserves funds and carries the
 remaining pools forward.
 
-### 14. Failure Semantics
+### 15. Failure Semantics
 
 Failures are handled according to their scope:
 
@@ -933,6 +993,18 @@ Archive operators must configure history indexing to retain historical IIP-59
 state. Without an archive history index, current-state reads and receipt logs
 remain available, but arbitrary historical cursor and pool verification is not
 guaranteed.
+
+Consensus state intentionally does not retain an append-only distribution
+history for every voter. Such a history would grow without bound and duplicate
+receipt data. Archive receipts and `DelegateDistributed` events are the
+canonical post-activation execution record, including the candidate, voter,
+amount, direct-or-compound result, bucket ID, block, and action hash.
+
+Indexers SHOULD expose a voter-oriented history query over that record, for
+example by candidate, voter, and epoch range. A unified wallet or tax API MAY
+join pre-activation Hermes records with post-activation IIP-59 events, but that
+API and its retention policy are outside consensus and outside this IIP's
+reference-node state transition.
 
 ## Reference Implementation
 
