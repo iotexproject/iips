@@ -45,7 +45,7 @@ The protocol performs distribution in five named stages:
 3. **Chunked Voter Distribution** - subsequent blocks pay at most
    `VoterBudgetPerBlock` voters in deterministic circular order.
 4. **Settlement Finalization** - the last chunk resolves orphaned pools and
-   deletes the cursor.
+   marks the cursor complete and retains it until the next settlement.
 5. **Overrun Recovery** - if a settlement reaches the next reward-era
    boundary, its remaining pools are carried into a newly initialized
    settlement instead of halting the chain.
@@ -408,6 +408,10 @@ message EpochDrainCursor {
   uint32 voter_index = 4;
   bytes settlement_seed = 5;
   uint32 delegate_start_index = 6;
+  bool completed = 7;
+  uint64 completed_height = 8;
+  uint64 start_epoch = 9;
+  uint64 end_epoch = 10;
 }
 ```
 
@@ -443,6 +447,13 @@ address-sorted voter snapshot remains unchanged; its work item records
 The fields have the following meaning:
 
 - `target_era` is the boundary epoch number that initialized the settlement.
+- `start_epoch` and `end_epoch` identify the epoch window covered by the
+  settlement. Normally `end_epoch = target_era` and
+  `start_epoch = end_epoch - EpochsPerRewardEra + 1`. Overrun recovery carries
+  an older unfinished cursor's `start_epoch` into the replacement cursor.
+- `completed` distinguishes a live drain from the retained result of the most
+  recent completed settlement; `completed_height` is the block that ran its
+  final chunk.
 - `settlement_seed` is the 32-byte value used for all list offsets.
 - `delegate_start_index` identifies the selected start in the original
   canonical delegate list; `delegates` is stored in the resulting circular
@@ -462,8 +473,11 @@ The fields have the following meaning:
   voter in circular traversal; the remaining metadata preserves the frozen
   voter allocation inputs.
 
-The cursor is a singleton. Its presence means a settlement is active. Its
-delegate work list is immutable except for distribution progress.
+The cursor is a singleton. `completed = false` means a settlement is active.
+Its delegate work list is immutable except for distribution progress. A
+completed cursor is retained for voter queries until the next era boundary,
+then cleared or overwritten by the next settlement. This retains only one
+settlement and does not create an append-only history.
 
 The pending pool itself is not frozen: later rewards can accrue behind the
 cursor. A chunk decrements only what it actually distributes. Any newer
@@ -471,7 +485,7 @@ balance remains available to a later settlement.
 
 ### 8. Chunked Voter Distribution
 
-While a cursor exists, every block that is not the last block of an epoch
+While an incomplete cursor exists, every block that is not the last block of an epoch
 includes a protocol-generated `VoterRewardChunk` system action. Epoch-final
 blocks run `GrantEpochReward` and do not also run a voter chunk.
 
@@ -592,13 +606,16 @@ Pools represented by a cursor entry but skipped because their snapshot is
 missing, changed, or has no positive voter weight are not treated as orphans.
 They remain pending for a future era snapshot.
 
-After orphan handling, the protocol deletes the cursor. Cursor absence is the
-settlement-complete signal and stops further `VoterRewardChunk` actions.
+After orphan handling, the protocol sets `completed = true`, records the final
+block height, and retains the cursor. Completed cursors do not produce further
+`VoterRewardChunk` actions. At the next era boundary, the protocol clears the
+completed cursor before initializing the next one.
 
 ### 10. Overrun Recovery
 
-At settlement initialization, a cursor from the previous reward era may still
-exist. This MUST NOT halt block production.
+At settlement initialization, an incomplete cursor from the previous reward
+era may still exist. This MUST NOT halt block production. A completed cursor is
+not an overrun and is cleared without emitting an overrun log.
 
 The protocol:
 
@@ -608,7 +625,7 @@ The protocol:
    count, and live residue;
 3. deletes the stale cursor without deleting any pending pool; and
 4. continues normal initialization, freezing current live pool balances into
-   a new cursor.
+   a new cursor whose `start_epoch` preserves the oldest unfinished window.
 
 Already distributed amounts are not paid again because they have already been
 removed from their pools. Undistributed residue and rewards accrued after the
@@ -702,10 +719,10 @@ The rewarding protocol exposes these native `ReadState` methods:
 |---|---|
 | `PendingBlockRewardPool(candidateID)` | Current pending voter amount for one candidate. |
 | `PendingBlockRewardPoolIndex()` | Sorted candidate identities with pool entries. |
-| `EpochDrainCursor()` | Current cursor and all frozen work items, or an empty cursor. |
+| `EpochDrainCursor()` | Active or most recently completed cursor and all frozen work items, or an empty cursor before the first settlement. |
 | `VoterRewardSnapshot(candidateID)` | Frozen mode, profile rates, voter weights, total weight, and snapshot hash. |
 | `VoterRewardAddress(candidateID)` | Effective destination under the frozen mode: current owner in on-chain mode or stored reward address in legacy mode, plus the reward-address update marker. |
-| `VoterRewardStatus(candidateID, voterAddress)` | One voter's status, circular index, and exact reward amount in the active settlement. |
+| `VoterRewardStatus(candidateID, voterAddress)` | One voter's status, epoch range, circular index, and exact reward amount in the active or most recently completed settlement. |
 
 Equivalent Web3 read methods are available through the rewarding protocol
 state interface:
@@ -719,15 +736,20 @@ voterRewardAddress(address candidateId)
 voterRewardStatus(address candidateId, address voter)
 ```
 
-The `epochDrainCursor()` Web3 result includes `settlementSeed`,
-`delegateStartIndex`, and a `voterStartIndices` array parallel to the returned
-candidate IDs. Native `ReadState` returns the same fields in the cursor
-protobuf. This makes historical circular order independently reconstructable.
+The `epochDrainCursor()` Web3 result includes `startEpoch`, `endEpoch`,
+`completed`, `completedHeight`, `settlementSeed`, `delegateStartIndex`, and a
+`voterStartIndices` array parallel to the returned candidate IDs. Native
+`ReadState` returns the same fields in the cursor protobuf. This makes the
+latest settlement's circular order independently reconstructable.
 
 `VoterRewardStatus` returns:
 
 ```text
 targetEra
+eraStartEpoch
+eraEndEpoch
+settlementCompleted
+completedHeight
 status
 logicalVoterIndex
 voterStartIndex
@@ -738,8 +760,8 @@ rewardAmount
 
 | Status | Meaning |
 |---|---|
-| `NO_ACTIVE_SETTLEMENT` | No settlement cursor exists. |
-| `CANDIDATE_NOT_INCLUDED` | The candidate has no frozen work item in the active settlement. |
+| `NO_ACTIVE_SETTLEMENT` | No active or completed settlement cursor exists. |
+| `CANDIDATE_NOT_INCLUDED` | The candidate has no frozen work item in the reported settlement. |
 | `VOTER_NOT_INCLUDED` | The voter is absent from that candidate's frozen snapshot. |
 | `WAITING` | The cursor has not processed this voter. |
 | `PROCESSED` | The cursor has passed this voter. A zero-weight or zero-share voter can be processed without receiving funds. |
@@ -748,10 +770,12 @@ rewardAmount
 `logicalVoterIndex` is the voter's position after applying the settlement's
 circular offset. `rewardAmount` is the exact amount assigned from the frozen
 voter pool, including any integer-division remainder assigned to the final
-positive-weight voter. The method reports only the active settlement. It does
-not retain a per-voter record after the cursor is deleted, and `PROCESSED` does
-not identify whether the payout was direct or compounded. Receipt events are
-the source for the executed destination.
+positive-weight voter. `settlementCompleted` and `completedHeight` distinguish
+the retained latest result from an in-progress cursor. The method retains only
+the most recent settlement until the next era boundary; it is not a historical
+ledger. `PROCESSED` does not identify whether the payout was direct or
+compounded. Receipt events are the source for the executed destination and
+exact per-voter payout block.
 
 Historical verification combines these state reads with block receipts,
 `DelegateDistributed` events, and transaction logs.
@@ -771,8 +795,8 @@ rewards are paid directly to the primary account.
 
 The legacy `ForwardRegistration` flow is not part of IIP-59 and is not
 migrated. Existing valid `AutoDeposit` registrations remain effective without
-a new transaction. During an active settlement, a voter can use
-`VoterRewardStatus` to check progress. After processing, the voter can verify
+a new transaction. During an active or recently completed settlement, a voter
+can use `VoterRewardStatus` to check progress. After processing, the voter can verify
 the direct account balance or native bucket deposit and use indexed
 `DelegateDistributed` events for historical details.
 
