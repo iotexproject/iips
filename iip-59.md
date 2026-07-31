@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-20
-Updated: 2026-07-30
+Updated: 2026-07-31
 ```
 
 ## Simple Summary
@@ -177,6 +177,40 @@ The feature context exposes the inverse gate
 `NoVoterRewardDistribution`. The IIP-59 path is active when that value is
 `false`.
 
+#### 1.1 Voter weight materialization
+
+Aggregated voter weights are consensus state (section 4). They are not written
+before activation: nodes adopt an activated release ahead of the activation
+height, and a node that wrote these entries during that window would commit
+state the previous release does not write and diverge from the rest of the
+network before the fork takes effect. The view is still maintained in the
+activated release throughout that window, so it is accurate at the block the
+gate opens.
+
+The complete table cannot be written in the activation block; at the design
+ceiling it exceeds a single block's execution budget. Starting at activation the
+protocol therefore writes it across consecutive blocks, at most
+`VoterWeightSeedBatchSize` pairs per block, in ascending
+`(candidate identity, voter)` key order, recording its position in state so the
+work resumes after a restart.
+
+The recorded position MUST be a key rather than a numeric offset. Voters are
+added and removed while the table is being written, and an offset would skip or
+repeat entries as the set shifts.
+
+No record of which pairs have already been written is required. Every block
+writes the current absolute weight of each pair it modifies, so a pair modified
+during this window is recorded correctly whether or not the ordered pass has
+reached it, and the pass writing that pair again later is idempotent.
+
+Until the pass completes, the protocol MUST treat the voter-weight view as
+unavailable when freezing a poll snapshot. An era boundary inside this window
+produces snapshots with no voter entries; the affected pools stay pending and
+settle in a later era under section 15. No reward is lost.
+
+Networks MUST size `VoterWeightSeedBatchSize` so the pass completes well within
+one era.
+
 ### 2. Reward Destinations
 
 #### 2.1 Delegate reward destination
@@ -315,6 +349,26 @@ The staking protocol maintains an incremental voter-weight view. Bucket state
 changes update the aggregated `(candidate identity, voter)` weight using the
 same weighting rules used by the staking and poll protocols. This includes
 eligible weight represented by native staking and contract staking.
+
+These aggregated weights are consensus state. Each `(candidate identity, voter)`
+pair is stored under its own key in the staking namespace, so a block writes
+only the pairs it changed and a delegate with a large voter set does not pay to
+rewrite that set on every bucket change. A stored weight is strictly positive; a
+pair whose weight reaches zero is removed rather than stored as zero.
+
+A node MUST load these entries at startup rather than recomputing them. The
+weights a settlement pays against are then the values the network agreed on, not
+a quantity each node derives for itself.
+
+Implementations MUST NOT instead commit a summary of a locally reconstructed
+table — a hash or equivalent digest — and verify it at startup. Such a check has
+no safe outcome. A mismatch cannot be reconciled, because the committed summary
+cannot be inverted to recover the agreed values; and it cannot be overridden,
+because rewriting the entry at a height the network has already committed
+diverges from the chain. The failure is also uniform: every node runs the same
+maintenance logic, so every node would reach the same mismatch and refuse to
+start together. Storing the weights themselves removes the second derivation and
+with it the possibility of disagreement.
 
 At `PutPollResult` for an era-boundary epoch, the protocol writes one
 `CandidatePollSnapshot` per candidate:
@@ -922,12 +976,21 @@ The following network configuration is consensus-critical:
 |---|---:|---|
 | `EpochsPerRewardEra` | 24 | Number of epochs between settlement initializations. |
 | `VoterBudgetPerBlock` | 2000 | Maximum voter entries processed by one chunk action; zero means unbounded. |
+| `VoterWeightSeedBatchSize` | 2000 | Maximum `(candidate, voter)` weight entries written per block while materializing the weight table at activation; zero writes the whole table in one block. |
 | `HermesRewardVaultAddresses` | two legacy Hermes vaults | Reward addresses whose pre-fork delegates migrate automatically. |
 | `DelegateProfileContractAddress` | network-specific | Contract containing per-delegate voter portions. |
 | `AutoDepositContractAddress` | network-specific | Contract containing per-voter compound preferences. |
 
 `EpochsPerRewardEra` MUST be non-zero on an activated network. There is no
 separate compound or delegate-count limit in the settlement algorithm.
+
+`VoterWeightSeedBatchSize` applies only during the activation window described
+in section 1.1 and is not consulted afterwards. It trades per-block cost against
+the number of blocks the window spans, and the total work is the same either
+way, so it SHOULD be sized for block-budget headroom rather than for a short
+window: the window need only close well inside the first era, and an era is
+several orders of magnitude longer than the pass requires at any reasonable
+value. Zero is appropriate only for test networks.
 
 For an era containing `B` blocks per epoch and `E` epochs, at most roughly
 `E * (B - 1)` continuation blocks are available because every epoch-final
@@ -965,6 +1028,7 @@ Failures are handled according to their scope:
 |---|---|
 | Missing, partial, malformed, or unreadable DelegateProfile entry | Mark that profile unregistered for the snapshot and pay 100% directly to the owner. |
 | No usable voter snapshot or no positive total weight | Keep the pool pending and retry in a future era. |
+| Era boundary reached before the activation-time weight materialization completes | Freeze snapshots with no voter entries; keep the pools pending and settle in a later era. This is an expected transient, not an error. |
 | Snapshot hash changes after cursor initialization | Skip the stale work item and keep its pool pending. |
 | AutoDeposit lookup fails | Pay that voter directly. |
 | Voter destination override is absent | Pay the voter account directly. |
@@ -1092,12 +1156,14 @@ need a non-default direct destination must configure the protocol action once.
 ### Determinism and replay
 
 All allocation inputs and circular offsets are frozen in state and committed
-to the state root. The settlement seed depends only on the prior block hash and
-the boundary epoch, both identical for every validator executing a given
-boundary block. Cursor, account, pool, and bucket changes are part of the same
-block state transition. A reorganization changes the parent hash but also
-reverts the seed, payout, and cursor advance together before deterministic
-re-execution.
+to the state root. Aggregated voter weights are likewise committed and are
+loaded rather than recomputed (section 4), so a restart cannot produce a node
+whose weights differ from the network's. The settlement seed depends only on the
+prior block hash and the boundary epoch, both identical for every validator
+executing a given boundary block. Cursor, account, pool, and bucket changes are
+part of the same block state transition. A reorganization changes the parent
+hash but also reverts the seed, payout, and cursor advance together before
+deterministic re-execution.
 
 The settlement seed is not a source of cryptographic randomness and MUST NOT
 be used for reward eligibility, weight, commission, or total allocation. A
