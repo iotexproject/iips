@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-03-20
-Updated: 2026-07-28
+Updated: 2026-07-30
 ```
 
 ## Simple Summary
@@ -17,8 +17,8 @@ deterministic reward pipeline. At activation, delegates whose existing reward
 address is one of the configured Hermes vaults migrate automatically. Other
 delegates retain legacy reward handling unless their owner explicitly enables
 on-chain distribution. For migrated delegates, voter rewards accumulate in
-per-delegate pools and are distributed in bounded chunks to voter accounts or
-eligible compound staking buckets.
+per-delegate pools and are distributed in bounded chunks to voter-selected
+account destinations or eligible compound staking buckets.
 
 ## Abstract
 
@@ -45,14 +45,16 @@ The protocol performs distribution in five named stages:
 3. **Chunked Voter Distribution** - subsequent blocks pay at most
    `VoterBudgetPerBlock` voters in deterministic circular order.
 4. **Settlement Finalization** - the last chunk resolves orphaned pools and
-   deletes the cursor.
+   marks the cursor complete and retains it until the next settlement.
 5. **Overrun Recovery** - if a settlement reaches the next reward-era
    boundary, its remaining pools are carried into a newly initialized
    settlement instead of halting the chain.
 
 Voters without an eligible compound bucket receive IOTX directly in their
-primary account and do not need a separate claim. Voters with an eligible
-native staking bucket receive the reward as an added bucket deposit.
+primary account or an explicitly selected reward account and do not need a
+separate claim. Voters with an eligible native staking bucket receive the
+reward as an added bucket deposit; compound routing takes precedence over the
+direct reward-account selection.
 
 ## Motivation
 
@@ -80,7 +82,8 @@ time budget.
   changing their legacy behavior by default.
 - Preserve the existing `DelegateProfile` reward portions.
 - Include voting weight from protocol-supported native and contract staking.
-- Support direct payout and native-bucket compounding.
+- Support voter-selected direct payout destinations and native-bucket
+  compounding.
 - Make every allocation reconstructable from frozen state and receipt logs.
 - Bound voter processing per block.
 - Preserve rewarding-fund accounting across partial and failed settlements.
@@ -109,7 +112,8 @@ time budget.
 | **Voter snapshot** | Frozen, address-sorted list of aggregated voter weights plus the delegate's profile rates. |
 | **Settlement seed** | Domain-separated hash that deterministically selects the circular starting offset for every delegate and voter list in one settlement. |
 | **Settlement cursor** | Persistent progress record for a multi-block voter distribution. |
-| **Direct payout** | Transfer from the rewarding protocol to the voter's primary account. No later claim is required. |
+| **Voter reward destination** | Account selected by a voter for direct payouts. With no explicit selection, this is the voter account. |
+| **Direct payout** | Transfer from the rewarding protocol to the effective voter reward destination. No later claim is required. |
 | **Compound payout** | Transfer from the rewarding protocol to an eligible native staking bucket owned by the voter. |
 
 ## Specification
@@ -175,6 +179,8 @@ The feature context exposes the inverse gate
 
 ### 2. Reward Destinations
 
+#### 2.1 Delegate reward destination
+
 The destination depends on the frozen reward mode:
 
 - **On-chain mode:** all delegate-directed rewards are paid immediately to the
@@ -203,6 +209,80 @@ amount    = direct delegate reward
 
 The log describes an immediate protocol outflow and does not represent a claim
 transaction submitted by the owner.
+
+#### 2.2 Voter direct reward destination
+
+Each voter has one global direct reward destination. With no explicit
+configuration, the effective destination is the voter account itself. A voter
+changes it by submitting the following voter-signed rewarding action after
+IIP-59 activation:
+
+```text
+SetVoterRewardDestination(recipient)
+```
+
+Its action payload is appended to `ActionCore` at field number 58:
+
+```proto
+message SetVoterRewardDestination {
+  bytes recipient = 1;
+}
+```
+
+The EVM-compatible form is:
+
+```solidity
+function setVoterRewardDestination(address recipient);
+```
+
+Only the transaction signer changes its own destination; one account cannot
+configure another voter. A 20-byte non-zero recipient different from the voter
+creates or replaces the override. An empty native recipient, the zero address,
+or the voter's own address clears the override and restores the voter account
+as the effective destination. Any other byte length is invalid.
+
+Overrides are sparse rewarding state keyed by:
+
+```text
+"vrd" || voter[20]
+```
+
+The stored value contains the 20-byte recipient and the block height of the
+last set operation. Clearing deletes the record; consequently an unset or
+cleared destination reports `explicitlySet = false` and `updatedHeight = 0`.
+The state/read representation is:
+
+```proto
+message VoterRewardDestination {
+  bytes recipient = 1;
+  bool explicitly_set = 2;
+  uint64 updated_height = 3;
+}
+```
+
+The successful action emits:
+
+```solidity
+event VoterRewardDestinationSet(
+    address indexed voter,
+    address oldRecipient,
+    address newRecipient
+);
+```
+
+The protocol resolves the effective destination when the voter's chunk entry
+executes. A change therefore affects any direct payout that has not yet been
+processed, including an active settlement, but never rewrites a completed
+payout. The destination is not frozen in the voter snapshot or settlement
+cursor.
+
+Compound routing has precedence. If the voter has an eligible compound bucket,
+the reward is deposited into that voter-owned bucket and the direct destination
+is ignored for that payout. If compound lookup is absent, fails, or resolves to
+an ineligible bucket, the fallback direct payout uses the effective destination
+at that block. Crediting a contract account changes its account balance only;
+it does not invoke receiver code or a callback. Resolution is one level only:
+the recipient's own voter reward destination, if any, is not followed.
 
 ### 3. Reward Portions from DelegateProfile
 
@@ -408,6 +488,10 @@ message EpochDrainCursor {
   uint32 voter_index = 4;
   bytes settlement_seed = 5;
   uint32 delegate_start_index = 6;
+  bool completed = 7;
+  uint64 completed_height = 8;
+  uint64 start_epoch = 9;
+  uint64 end_epoch = 10;
 }
 ```
 
@@ -443,6 +527,13 @@ address-sorted voter snapshot remains unchanged; its work item records
 The fields have the following meaning:
 
 - `target_era` is the boundary epoch number that initialized the settlement.
+- `start_epoch` and `end_epoch` identify the epoch window covered by the
+  settlement. Normally `end_epoch = target_era` and
+  `start_epoch = end_epoch - EpochsPerRewardEra + 1`. Overrun recovery carries
+  an older unfinished cursor's `start_epoch` into the replacement cursor.
+- `completed` distinguishes a live drain from the retained result of the most
+  recent completed settlement; `completed_height` is the block that ran its
+  final chunk.
 - `settlement_seed` is the 32-byte value used for all list offsets.
 - `delegate_start_index` identifies the selected start in the original
   canonical delegate list; `delegates` is stored in the resulting circular
@@ -462,8 +553,11 @@ The fields have the following meaning:
   voter in circular traversal; the remaining metadata preserves the frozen
   voter allocation inputs.
 
-The cursor is a singleton. Its presence means a settlement is active. Its
-delegate work list is immutable except for distribution progress.
+The cursor is a singleton. `completed = false` means a settlement is active.
+Its delegate work list is immutable except for distribution progress. A
+completed cursor is retained for voter queries until the next era boundary,
+then cleared or overwritten by the next settlement. This retains only one
+settlement and does not create an append-only history.
 
 The pending pool itself is not frozen: later rewards can accrue behind the
 cursor. A chunk decrements only what it actually distributes. Any newer
@@ -471,7 +565,7 @@ balance remains available to a later settlement.
 
 ### 8. Chunked Voter Distribution
 
-While a cursor exists, every block that is not the last block of an epoch
+While an incomplete cursor exists, every block that is not the last block of an epoch
 includes a protocol-generated `VoterRewardChunk` system action. Epoch-final
 blocks run `GrantEpochReward` and do not also run a voter chunk.
 
@@ -511,16 +605,16 @@ window rather than all preceding voters.
 #### 8.2 Direct payout
 
 Unless compound routing succeeds, the protocol adds the share directly to the
-voter's primary account balance. The voter does not receive a rewarding
-`unclaimedBalance` entry and does not need to submit
-`ClaimFromRewardingFund`.
+voter's effective reward-destination account balance as resolved in the chunk
+block. The voter does not receive a rewarding `unclaimedBalance` entry and
+neither the voter nor the recipient needs to submit `ClaimFromRewardingFund`.
 
 Each non-zero direct payout emits a transaction log with:
 
 ```text
 type      = CLAIM_FROM_REWARDING_FUND
 sender    = RewardingPoolAddr
-recipient = voter
+recipient = effective voter reward destination
 amount    = voter share
 ```
 
@@ -592,13 +686,16 @@ Pools represented by a cursor entry but skipped because their snapshot is
 missing, changed, or has no positive voter weight are not treated as orphans.
 They remain pending for a future era snapshot.
 
-After orphan handling, the protocol deletes the cursor. Cursor absence is the
-settlement-complete signal and stops further `VoterRewardChunk` actions.
+After orphan handling, the protocol sets `completed = true`, records the final
+block height, and retains the cursor. Completed cursors do not produce further
+`VoterRewardChunk` actions. At the next era boundary, the protocol clears the
+completed cursor before initializing the next one.
 
 ### 10. Overrun Recovery
 
-At settlement initialization, a cursor from the previous reward era may still
-exist. This MUST NOT halt block production.
+At settlement initialization, an incomplete cursor from the previous reward
+era may still exist. This MUST NOT halt block production. A completed cursor is
+not an overrun and is cleared without emitting an overrun log.
 
 The protocol:
 
@@ -608,7 +705,7 @@ The protocol:
    count, and live residue;
 3. deletes the stale cursor without deleting any pending pool; and
 4. continues normal initialization, freezing current live pool balances into
-   a new cursor.
+   a new cursor whose `start_epoch` preserves the oldest unfinished window.
 
 Already distributed amounts are not paid again because they have already been
 removed from their pools. Undistributed residue and rewards accrued after the
@@ -630,6 +727,7 @@ event DelegateDistributed(
     uint256 totalVoterPool,
     bytes32 snapshotHash,
     address[] voters,
+    address[] recipients,
     uint256[] amounts,
     uint64[] compoundBucketIds
 );
@@ -643,7 +741,12 @@ event DelegateDistributed(
   commissions paid in earlier epochs of the era.
 - `totalVoterPool` is the sum of `amounts` in this event's window.
 - `snapshotHash` identifies the complete frozen voter-weight list.
-- `voters`, `amounts`, and `compoundBucketIds` are parallel arrays.
+- `voters`, `recipients`, `amounts`, and `compoundBucketIds` are parallel
+  arrays.
+- `voters[i]` is the beneficiary whose frozen weight earned the reward.
+- For a direct payout, `recipients[i]` is the account actually credited. For a
+  compound payout, it equals `voters[i]` and `compoundBucketIds[i]` identifies
+  the actual staking destination.
 - `compoundBucketIds[i] == 0` means direct payout.
 - `compoundBucketIds[i] > 0` is the actual native bucket that received the
   compound payout.
@@ -690,6 +793,14 @@ event VoterRewardOptInSet(
 
 `optIn` is always true for a successful action.
 
+#### 11.5 Voter reward destination event
+
+A successful `SetVoterRewardDestination` action emits
+`VoterRewardDestinationSet` as specified in Section 2.2. `oldRecipient` and
+`newRecipient` are effective addresses: setting the first override reports the
+voter as `oldRecipient`, and clearing an override reports the voter as
+`newRecipient`.
+
 ### 12. State Access
 
 Archive nodes that provide historical IIP-59 verification MUST configure
@@ -702,9 +813,11 @@ The rewarding protocol exposes these native `ReadState` methods:
 |---|---|
 | `PendingBlockRewardPool(candidateID)` | Current pending voter amount for one candidate. |
 | `PendingBlockRewardPoolIndex()` | Sorted candidate identities with pool entries. |
-| `EpochDrainCursor()` | Current cursor and all frozen work items, or an empty cursor. |
+| `EpochDrainCursor()` | Active or most recently completed cursor and all frozen work items, or an empty cursor before the first settlement. |
 | `VoterRewardSnapshot(candidateID)` | Frozen mode, profile rates, voter weights, total weight, and snapshot hash. |
 | `VoterRewardAddress(candidateID)` | Effective destination under the frozen mode: current owner in on-chain mode or stored reward address in legacy mode, plus the reward-address update marker. |
+| `VoterRewardDestination(voterAddress)` | Effective direct voter recipient, whether an override is explicitly set, and the set height. |
+| `VoterRewardStatus(candidateID, voterAddress)` | One voter's status, epoch range, circular index, and exact reward amount in the active or most recently completed settlement. |
 
 Equivalent Web3 read methods are available through the rewarding protocol
 state interface:
@@ -715,17 +828,93 @@ pendingBlockRewardPoolIndex()
 epochDrainCursor()
 voterRewardSnapshot(address candidateId)
 voterRewardAddress(address candidateId)
+voterRewardDestination(address voter)
+voterRewardStatus(address candidateId, address voter)
 ```
 
-The `epochDrainCursor()` Web3 result includes `settlementSeed`,
-`delegateStartIndex`, and a `voterStartIndices` array parallel to the returned
-candidate IDs. Native `ReadState` returns the same fields in the cursor
-protobuf. This makes historical circular order independently reconstructable.
+`VoterRewardDestination` returns:
+
+```text
+recipient
+explicitlySet
+updatedHeight
+```
+
+When no sparse override exists, `recipient` is the voter, `explicitlySet` is
+false, and `updatedHeight` is zero. The read reports the current configuration;
+the `recipients` array in the historical `DelegateDistributed` event is the
+authoritative record of where an already executed direct payout went.
+
+The `epochDrainCursor()` Web3 result includes `startEpoch`, `endEpoch`,
+`completed`, `completedHeight`, `settlementSeed`, `delegateStartIndex`, and a
+`voterStartIndices` array parallel to the returned candidate IDs. Native
+`ReadState` returns the same fields in the cursor protobuf. This makes the
+latest settlement's circular order independently reconstructable.
+
+`VoterRewardStatus` returns:
+
+```text
+targetEra
+eraStartEpoch
+eraEndEpoch
+settlementCompleted
+completedHeight
+status
+logicalVoterIndex
+voterStartIndex
+rewardAmount
+```
+
+`status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `NO_ACTIVE_SETTLEMENT` | No active or completed settlement cursor exists. |
+| `CANDIDATE_NOT_INCLUDED` | The candidate has no frozen work item in the reported settlement. |
+| `VOTER_NOT_INCLUDED` | The voter is absent from that candidate's frozen snapshot. |
+| `WAITING` | The cursor has not processed this voter. |
+| `PROCESSED` | The cursor has passed this voter. A zero-weight or zero-share voter can be processed without receiving funds. |
+| `SNAPSHOT_UNAVAILABLE` | The frozen snapshot is missing, stale, or inconsistent with the cursor, so status cannot be derived safely. |
+
+`logicalVoterIndex` is the voter's position after applying the settlement's
+circular offset. `rewardAmount` is the exact amount assigned from the frozen
+voter pool, including any integer-division remainder assigned to the final
+positive-weight voter. `settlementCompleted` and `completedHeight` distinguish
+the retained latest result from an in-progress cursor. The method retains only
+the most recent settlement until the next era boundary; it is not a historical
+ledger. `PROCESSED` does not identify whether the payout was direct or
+compounded. Receipt events are the source for the executed destination and
+exact per-voter payout block.
 
 Historical verification combines these state reads with block receipts,
 `DelegateDistributed` events, and transaction logs.
 
-### 13. Genesis Parameters
+### 13. Voter Preparation
+
+Voters who want direct payouts to their voting account do not need to take any
+action. A voter who uses a separate treasury, custody, or tax account MAY set
+that account with `SetVoterRewardDestination` and verify the effective value
+with `VoterRewardDestination`. After a successful settlement, the reward is
+already in the effective account and does not require a rewarding-fund claim.
+
+Voters who want automatic compounding SHOULD register an eligible native
+staking bucket in the existing `AutoDeposit` contract before their payout is
+processed. The bucket must be owned by the voter, active,
+auto-staked, and not unstaked. Contract-staking votes are included in reward
+weight, but contract buckets are not eligible compound destinations; those
+rewards are paid directly to the effective reward destination.
+
+The legacy `ForwardRegistration` flow is not part of IIP-59 and is not
+automatically migrated into protocol state. A voter that previously relied on
+that contract MUST submit `SetVoterRewardDestination` to obtain equivalent
+post-activation direct routing. Existing valid `AutoDeposit` registrations
+remain effective without a new transaction and override direct routing when
+eligible. During an active or recently completed settlement, a voter can use
+`VoterRewardStatus` to check progress. After processing, the voter can verify
+the direct account balance or native bucket deposit and use indexed
+`DelegateDistributed` events for historical details.
+
+### 14. Genesis Parameters
 
 The following network configuration is consensus-critical:
 
@@ -746,13 +935,29 @@ block is reserved for epoch rewards. A bounded configuration should satisfy:
 
 ```text
 VoterBudgetPerBlock * availableContinuationBlocks
-    >= expected voter entries per settlement * safety factor
+    >= expected (candidate, voter) entries per settlement * safety factor
 ```
+
+Capacity MUST be estimated from the sum of voter-list lengths across all
+settled candidates, not from the number of distinct voter addresses. Operators
+SHOULD include headroom for voter growth and monitor cursor age, remaining
+entries, and `EPOCH_DRAIN_OVERRUN` logs. With the defaults and `B = 360`, the
+nominal capacity is approximately `24 * 359 * 2000 = 17,232,000`
+candidate-voter entries per era. Networks MUST benchmark representative
+validation hardware before activation; the nominal count is not a substitute
+for block mint and validation latency measurements.
+
+Each direct payout adds one rewarding-state lookup for the voter's sparse
+destination override. With the default budget, a direct-only chunk therefore
+performs at most 2,000 such lookups in addition to account writes and the
+existing AutoDeposit checks. Compound payouts do not require this lookup.
+Benchmarks MUST include both mostly-unset and densely-configured destination
+state because archive/history-index I/O and cache behavior can differ.
 
 If this capacity is exceeded, Overrun Recovery preserves funds and carries the
 remaining pools forward.
 
-### 14. Failure Semantics
+### 15. Failure Semantics
 
 Failures are handled according to their scope:
 
@@ -762,7 +967,10 @@ Failures are handled according to their scope:
 | No usable voter snapshot or no positive total weight | Keep the pool pending and retry in a future era. |
 | Snapshot hash changes after cursor initialization | Skip the stale work item and keep its pool pending. |
 | AutoDeposit lookup fails | Pay that voter directly. |
-| Bucket is missing, unreadable, contract-based, not owned by voter, not auto-staked, or unstaked | Pay that voter directly. |
+| Voter destination override is absent | Pay the voter account directly. |
+| Bucket is missing, unreadable, contract-based, not owned by voter, not auto-staked, or unstaked | Pay the effective voter reward destination directly. |
+| Invalid voter destination action length | Reject the action. |
+| Malformed persisted voter destination state | Fail the state transition; do not guess or truncate an address. |
 | Previous cursor survives to the next era boundary | Execute Overrun Recovery. |
 | Candidate pool becomes orphaned but candidate state exists | Pay the candidate owner directly. |
 | Candidate state for an orphaned pool is absent | Return the amount to rewarding available balance. |
@@ -822,11 +1030,20 @@ recipient of that bounded remainder. Reusing one seed for all lists keeps the
 state compact and makes the entire traversal straightforward to reproduce from
 archive state.
 
-### Direct account payout
+### Direct account payout and voter-selected routing
 
-Writing direct rewards to the voter account completes the payment in one state
+Writing direct rewards to an account completes the payment in one state
 transition. Keeping a second per-voter rewarding balance would require another
-claim transaction and preserve unnecessary rewarding state indefinitely.
+claim transaction and preserve unnecessary rewarding state indefinitely. A
+global voter-selected destination covers custody, treasury, and tax-account
+workflows without duplicating configuration for every delegate.
+
+Resolving the destination at chunk execution gives the voter control over
+unprocessed payouts and avoids copying mutable routing data into every frozen
+snapshot. Recording both beneficiary and recipient in `DelegateDistributed`
+preserves the historical result even after the voter changes configuration.
+Sparse overrides keep default users state-free, and deleting self/zero resets
+avoids permanent tombstones.
 
 ### Inline compound routing
 
@@ -856,7 +1073,8 @@ explicitly enabled delegates:
   rewards; delegate-directed rewards are paid directly to the current owner.
 - Their voter portions enter per-delegate pending pools rather than a delegate
   rewarding balance.
-- Direct voter rewards appear immediately in account balances.
+- Direct voter rewards appear immediately in the voter-selected account
+  balance, defaulting to the voter account.
 - Compound voter rewards appear as native staking bucket deposits.
 
 Delegates outside the configured Hermes vault set retain their stored reward
@@ -866,7 +1084,8 @@ accrued before migration remain claimable and are not rewritten.
 
 Existing `DelegateProfile` and `AutoDeposit` contracts remain the configuration
 sources, so delegates and voters do not need new configuration transactions
-solely for IIP-59.
+solely for IIP-59. `ForwardRegistration` entries are not imported; voters that
+need a non-default direct destination must configure the protocol action once.
 
 ## Security Considerations
 
@@ -908,6 +1127,20 @@ pool liability and rewarding total balance by the amount leaving the protocol.
 Overrun recovery never creates a new balance; it only replaces the cursor over
 existing pools.
 
+### Destination authorization and account safety
+
+Only the voter-signed action can change that voter's direct destination. The
+recipient does not gain control of the voter's stake, voting weight,
+AutoDeposit configuration, or future configuration action. A voter can restore
+the default by setting self or zero.
+
+The protocol treats the recipient as an account address and performs no
+contract callback. This prevents recipient code from re-entering reward or
+staking transitions. It also means applications MUST NOT assume an ERC-style
+receiver hook will execute. A mistaken but valid recipient is an authorized
+on-chain transfer and cannot be reversed by the protocol; wallets SHOULD show
+the effective address and reset semantics before signing.
+
 ### Denial of service
 
 The voter payout loop is bounded by `VoterBudgetPerBlock` when the parameter is
@@ -934,6 +1167,19 @@ state. Without an archive history index, current-state reads and receipt logs
 remain available, but arbitrary historical cursor and pool verification is not
 guaranteed.
 
+Consensus state intentionally does not retain an append-only distribution
+history for every voter. Such a history would grow without bound and duplicate
+receipt data. Archive receipts and `DelegateDistributed` events are the
+canonical post-activation execution record, including the candidate, voter,
+amount, beneficiary voter, actual direct recipient, direct-or-compound result,
+bucket ID, block, and action hash.
+
+Indexers SHOULD expose a voter-oriented history query over that record, for
+example by candidate, voter, and epoch range. A unified wallet or tax API MAY
+join pre-activation Hermes records with post-activation IIP-59 events, but that
+API and its retention policy are outside consensus and outside this IIP's
+reference-node state transition.
+
 ## Reference Implementation
 
 The reference implementation is in
@@ -944,8 +1190,8 @@ The reference implementation is in
 - `action/protocol/poll/` invokes snapshot freezing at era-boundary poll
   updates.
 - `action/protocol/rewarding/` implements reward accumulation, cursor
-  initialization, chunk distribution, finalization, overrun recovery, and
-  state reads.
+  initialization, chunk distribution, voter destination state/actions,
+  finalization, overrun recovery, and state reads.
 - `action/protocol/rewarding/delegateprofile/` reads and validates profile
   portions.
 - `action/protocol/rewarding/autodeposit/` resolves compound preferences and
