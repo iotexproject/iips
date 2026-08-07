@@ -372,7 +372,7 @@ stored in consensus state; receipts and these events are the historical record.
 Implementations MAY expose pools, snapshots, cursor progress, destinations, and
 latest settlement status through state APIs.
 
-### 7. Parameters and Failure Rules
+### 7. Parameters
 
 | Genesis field | Default | Meaning |
 |---|---:|---|
@@ -394,42 +394,98 @@ It MUST be benchmarked using distinct voters and representative mint and
 validation hardware before activation. Index scans are additionally bounded by
 a fixed, non-configurable multiple of `VoterBudgetPerBlock`.
 
-| Condition | Required result |
-|---|---|
-| Missing, invalid, or unreadable profile | Freeze unregistered, `10000` bps rates. |
-| Missing snapshot, non-positive weight, missing freeze height, or unresolved delegate destination | Skip work item and preserve its pool. |
-| Candidate view cannot be constructed while freezing | Fail the block. |
-| Weight sum exceeds denominator | Apply the payout clamp. |
-| AutoDeposit lookup or bucket eligibility/read fails | Direct payout. |
-| Invalid destination action length | Reject the action. |
-| Malformed persisted destination | Fail the state transition. |
-| Valid compound deposit mutation fails | Fail the state transition. |
-| Previous cursor remains | Execute overrun recovery. |
-| Residual or orphaned pool | Route as specified in section 5.4; never burn. |
-| No cursor, completed cursor, or inactive fork rejects a chunk | Settle a Failure receipt without moving the cursor. |
-| Any other read, write, range-scan, state, or log error | Fail the block. |
-
-Only explicitly enumerated, consensus-derived conditions may settle a Failure
-receipt. All other errors fail closed because node-local capability errors may
-differ between proposer and validator. No fallback may depend on external RPC
-or wall-clock state.
-
 ## Rationale
 
-Recomputing weights from buckets avoids a persistent `(delegate, voter)` view
-that every staking mutation must maintain and every era must freeze. COW
-commits the as-of-`H` inputs in ordinary chain state, so consensus does not
-depend on archive retention.
+### Hermes-targeted migration and one-way opt-in
 
-Voter-major traversal performs one route decision and one transfer per distinct
-voter rather than per `(delegate, voter)` pair. Shard rotation prevents the same
-address prefix from always being served first when settlement overruns; its seed
-changes order only, never eligibility or amount.
+Automatic migration follows the existing operational boundary: delegates whose
+rewards already flow through a configured Hermes vault are the delegates for
+which Hermes performs voter distribution. Other delegates keep their current
+address and claim workflow instead of receiving an unrequested fork-time
+change. A one-way opt-in prevents pending pools or active settlements from being
+stranded by switching back to legacy mode. The all-to-owner profile fallback
+also avoids assigning a voter portion that the delegate never configured.
 
-The staking vote accumulator and stateless bucket recomputation can disagree.
-The clamp makes disagreement an underpayment rather than an inflation, and the
-residual sweep restores accounting without assigning drift or division dust to
-an arbitrary voter.
+### Candidate identity as the state key
+
+Owner and operator addresses may change, whereas candidate identity is stable.
+Using it for snapshots, profile lookup, pending pools, cursor entries, and
+events prevents an ownership or operator rotation from splitting or stranding
+a delegate's rewards.
+
+### Recomputed weights and COW
+
+A persistent `(delegate, voter)` weight table would have to be seeded by a
+full-chain bucket scan, updated by every staking mutation, and frozen in full at
+each era boundary. Its state and maintenance cost scale with delegate-voter
+pairs, and a missed mutation hook can silently make the aggregate disagree with
+the buckets from which it was derived.
+
+IIP-59 instead commits the inputs needed to recompute weight: small
+per-delegate scalars plus bucket and owner-index state as of `H`. Every node
+derives the result from the same committed inputs. This removes the initial
+seed and mutation-hook maintenance surface while keeping the source of truth in
+staking state.
+
+Historical or archive-state reads could expose the same height, but would make
+consensus depend on node retention configuration. COW keeps the as-of-`H` value
+inside ordinary committed state. It copies only keys first changed while the
+window is open, while tombstones distinguish a key created after `H` from one
+that existed at `H`. High-water marks bound the frozen bucket namespace and
+prevent later creations from entering the settlement.
+
+### Voter-major settlement
+
+A delegate-major walk repeats destination lookup, routing, and balance writes
+for every `(delegate, voter)` pair. Walking voters first combines all delegate
+contributions into one payment per voter, so a voter supporting several
+delegates receives one transfer and the expensive routing work scales with
+distinct voters rather than pairs. A single voter budget therefore bounds the
+main per-block cost directly; the scan-key bound also covers sparse indexes and
+zero-weight entries that consume work without producing a payout.
+
+Address shards make progress independent of a storage engine's iteration order
+and keep the cursor compact. Rotating the starting shard avoids repeatedly
+serving the same address prefix first if settlement reaches an era boundary.
+The seed affects traversal order only, so it cannot change membership, weights,
+commission, or total fund movement.
+
+### Payout clamp and residual sweep
+
+The frozen denominator is a path-dependent accumulator maintained by staking
+handlers, while each numerator is recomputed statelessly from buckets. These
+quantities can disagree, including around predicates such as self-stake
+endorsement expiry that have no transaction at the moment they change.
+
+The clamp makes any disagreement safe in direction: voters may be underpaid,
+but rewarding-fund outflow cannot exceed the amount reserved for the delegate.
+The residual sweep then restores accounting without selecting an arbitrary
+"last voter" to absorb accumulator drift or floor-division dust. Assigning the
+difference to such a voter would turn an accounting mismatch into a real
+overpayment.
+
+### Frozen plans and live pools
+
+Accumulating voter portions over an era amortizes snapshot and routing work
+while paying delegate commission immediately. Mode, rates, denominator, freeze
+height, self-stake bucket, owner destination, and settlement amount are frozen
+so a multi-block drain has stable inputs. The pending pool remains live so new
+block and epoch rewards can accrue normally; because the cursor tracks only its
+frozen amount, those newer rewards are unambiguously deferred to a later era.
+
+### Direct payout and voter-selected routing
+
+Direct account credit completes payment in one transition. Creating a second
+per-voter rewarding balance would require another claim and retain state until
+the voter acts. A single global destination supports custody, treasury, and tax
+accounts without duplicating configuration per delegate, while sparse
+overrides leave default users state-free.
+
+Resolving destination and compound preference when the chunk executes gives
+the voter control over unprocessed payouts without copying mutable routing data
+into every snapshot. Distribution events record the beneficiary, actual
+recipient, route, and compound bucket, preserving an auditable result after the
+configuration changes.
 
 ## Backward Compatibility
 
