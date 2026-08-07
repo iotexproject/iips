@@ -2,7 +2,7 @@
 IIP: 21
 Title: Bridge IOTX from IoTeX to Ethereum
 Author: Leo (leo@iotex.io)
-Status: WIP
+Status: Final
 Type: Standards Track
 Category: Core
 Created: 2023-04-17
