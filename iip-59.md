@@ -44,6 +44,29 @@ block. It does not change delegate selection, vote-weight formulas,
 productivity, slashing, foundation bonuses, priority tips, or legacy handling
 for delegates that do not migrate.
 
+### Delegate and Voter Story
+
+```mermaid
+sequenceDiagram
+    actor Delegate as Delegate owner
+    actor Voter
+    participant Protocol
+
+    Delegate->>Protocol: Migrate automatically or opt in
+    Delegate->>Protocol: Configure voter reward portions
+    Voter->>Protocol: Stake and vote for the delegate
+    opt Optional payout preference
+        Voter->>Protocol: Set a direct destination or compound bucket
+    end
+
+    Note over Delegate,Protocol: During each block and epoch
+    Protocol-->>Delegate: Pay commission immediately
+    Protocol->>Protocol: Accumulate the voter portion
+
+    Note over Voter,Protocol: At settlement
+    Protocol-->>Voter: Settle by direct credit or bucket deposit
+```
+
 ## Specification
 
 Candidate identity, rather than mutable owner or operator address, keys all
@@ -61,6 +84,29 @@ The following invariants apply throughout the specification:
   settlement; and
 - cursor movement, fund movement, destination or staking writes, and logs for
   one chunk are one atomic state transition.
+
+### Core Reward Flow
+
+```mermaid
+flowchart TD
+    A[Block or epoch reward] --> B{On-chain reward mode?}
+    B -- No --> C[Legacy reward address and claim path]
+    B -- Yes --> D[Split using the frozen commission rate]
+    D --> E[Pay commission to the delegate owner]
+    D --> F[Add voter share to the delegate pending pool]
+    F --> G[Era boundary: freeze delegate scalars and open COW window]
+    G --> H[Walk voter-address shards in bounded chunks]
+    H --> I[Recompute weights from buckets at freeze height H]
+    I --> J[Clamp delegate shares and combine each voter payment]
+    J --> K{Eligible compound bucket?}
+    K -- Yes --> L[Deposit into the native staking bucket]
+    K -- No --> M[Credit the effective account destination]
+    L --> N{All 256 shards complete?}
+    M --> N
+    N -- No --> H
+    N -- Yes --> O[Sweep residual and orphaned pools]
+    O --> P[Seal COW window and complete the cursor]
+```
 
 ### 1. Activation
 
