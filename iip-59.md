@@ -85,18 +85,23 @@ The following invariants apply throughout the specification:
 - cursor movement, fund movement, destination or staking writes, and logs for
   one chunk are one atomic state transition.
 
-### Core Reward Flow
+### Core Reward Lifecycle
 
 ```mermaid
-flowchart TD
-    A[Block and epoch rewards] --> B[Split by delegate profile]
-    B --> C[Commission<br/>Paid immediately to the delegate owner]
-    B --> D[Voter portion<br/>Added to the delegate pending pool]
-    D --> E[Era boundary<br/>Freeze delegate scalars and bucket state with COW]
-    E --> F[Later blocks<br/>Recompute voter weights and settle voter-major]
-    F --> G{Payout route}
-    G --> H[Direct account credit]
-    G --> I[Compound into an eligible native bucket]
+timeline
+    title IIP-59 reward lifecycle
+    section Accrual
+        Block and epoch rewards : Commission paid immediately to delegate owner
+                                : Voter portion added to pending pool
+    section Freeze
+        Era boundary : Freeze delegate scalars
+                     : Preserve bucket state with COW
+    section Settlement
+        Later blocks : Recompute voter weights from frozen state
+                     : Settle voter-major in bounded chunks
+    section Payout
+        Per voter : Direct account credit
+                  : Or compound into an eligible native bucket
 ```
 
 ### 1. Activation
