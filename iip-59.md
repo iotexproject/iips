@@ -89,23 +89,14 @@ The following invariants apply throughout the specification:
 
 ```mermaid
 flowchart TD
-    A[Block or epoch reward] --> B{On-chain reward mode?}
-    B -- No --> C[Legacy reward address and claim path]
-    B -- Yes --> D[Split using the frozen commission rate]
-    D --> E[Pay commission to the delegate owner]
-    D --> F[Add voter share to the delegate pending pool]
-    F --> G[Era boundary: freeze delegate scalars and open COW window]
-    G --> H[Walk voter-address shards in bounded chunks]
-    H --> I[Recompute weights from buckets at freeze height H]
-    I --> J[Clamp delegate shares and combine each voter payment]
-    J --> K{Eligible compound bucket?}
-    K -- Yes --> L[Deposit into the native staking bucket]
-    K -- No --> M[Credit the effective account destination]
-    L --> N{All 256 shards complete?}
-    M --> N
-    N -- No --> H
-    N -- Yes --> O[Sweep residual and orphaned pools]
-    O --> P[Seal COW window and complete the cursor]
+    A[Block and epoch rewards] --> B[Split by delegate profile]
+    B --> C[Commission<br/>Paid immediately to the delegate owner]
+    B --> D[Voter portion<br/>Added to the delegate pending pool]
+    D --> E[Era boundary<br/>Freeze delegate scalars and bucket state with COW]
+    E --> F[Later blocks<br/>Recompute voter weights and settle voter-major]
+    F --> G{Payout route}
+    G --> H[Direct account credit]
+    G --> I[Compound into an eligible native bucket]
 ```
 
 ### 1. Activation
