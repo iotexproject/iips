@@ -396,23 +396,6 @@ a fixed, non-configurable multiple of `VoterBudgetPerBlock`.
 
 ## Rationale
 
-### Hermes-targeted migration and one-way opt-in
-
-Automatic migration follows the existing operational boundary: delegates whose
-rewards already flow through a configured Hermes vault are the delegates for
-which Hermes performs voter distribution. Other delegates keep their current
-address and claim workflow instead of receiving an unrequested fork-time
-change. A one-way opt-in prevents pending pools or active settlements from being
-stranded by switching back to legacy mode. The all-to-owner profile fallback
-also avoids assigning a voter portion that the delegate never configured.
-
-### Candidate identity as the state key
-
-Owner and operator addresses may change, whereas candidate identity is stable.
-Using it for snapshots, profile lookup, pending pools, cursor entries, and
-events prevents an ownership or operator rotation from splitting or stranding
-a delegate's rewards.
-
 ### Recomputed weights and COW
 
 A persistent `(delegate, voter)` weight table would have to be seeded by a
@@ -463,29 +446,6 @@ The residual sweep then restores accounting without selecting an arbitrary
 "last voter" to absorb accumulator drift or floor-division dust. Assigning the
 difference to such a voter would turn an accounting mismatch into a real
 overpayment.
-
-### Frozen plans and live pools
-
-Accumulating voter portions over an era amortizes snapshot and routing work
-while paying delegate commission immediately. Mode, rates, denominator, freeze
-height, self-stake bucket, owner destination, and settlement amount are frozen
-so a multi-block drain has stable inputs. The pending pool remains live so new
-block and epoch rewards can accrue normally; because the cursor tracks only its
-frozen amount, those newer rewards are unambiguously deferred to a later era.
-
-### Direct payout and voter-selected routing
-
-Direct account credit completes payment in one transition. Creating a second
-per-voter rewarding balance would require another claim and retain state until
-the voter acts. A single global destination supports custody, treasury, and tax
-accounts without duplicating configuration per delegate, while sparse
-overrides leave default users state-free.
-
-Resolving destination and compound preference when the chunk executes gives
-the voter control over unprocessed payouts without copying mutable routing data
-into every snapshot. Distribution events record the beneficiary, actual
-recipient, route, and compound bucket, preserving an auditable result after the
-configuration changes.
 
 ## Backward Compatibility
 
