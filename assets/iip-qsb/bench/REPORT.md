@@ -6,6 +6,8 @@
 
 These are **darwin/arm64 measurements**, not a linux/amd64 gas calibration. SHA-2 can use CPU SHA instructions or optimized implementations on both platforms, with the exact acceleration depending on CPU and Go implementation. SHAKE/Keccak has no comparably general single-stream hardware path in Go. Benchmark the same code on representative linux/amd64 validators before fixing a consensus gas schedule.
 
+An independent full-action cross-check on a native Apple M2 Pro (Go 1.26.5) measured 0.272 ms/verify and 0.539 ms for bind + guarded UNSTAKE (two verifies), consistent with the M3 Pro result and leaving ~1.8× headroom at `G_VERIFY = 30,000`. The same source cross-compiled to amd64 and run under Rosetta 2 was ~8× slower; that is an emulation artifact, not a linux/amd64 calibration. Native linux/amd64 full-action measurements are still required.
+
 ## Measurements
 
 Go 1.26.5, darwin/arm64, Apple M3 Pro, CIRCL v1.6.5. One benchmark run per operation; `KeyGen` and deterministic pure `Sign` used `-benchtime=3x`, `Verify` used `-benchtime=200x`, all with `-benchmem -count=1`. The message was `staking bucket guard authorization`, with context `IOTEX-PQ-BUCKET-v1`. Verification used an already generated key and valid signature; its time includes CIRCL signature parsing and `NewMessage`, but excludes key generation, wire decoding, and transaction processing. Key generation includes `crypto/rand` reads. Each operation reports **ns/op (B/op; allocs/op)**.
@@ -23,6 +25,37 @@ Go 1.26.5, darwin/arm64, Apple M3 Pro, CIRCL v1.6.5. One benchmark run per opera
 
 The Verify column is the measured **verify cost per operation** to start a gas estimate. If the chain later chooses a budget of `T` ns per gas, a first conversion is `ceil(verify_ns / T)` gas, followed by calibration against slower supported validators and any key decoding, transaction, and signature byte costs. No gas unit is assumed here.
 
+## Independent full-action cross-check (Apple M2 Pro)
+
+A standalone MVP simulator measured the full bind + guarded UNSTAKE path, not just the primitive. A reduced, self-contained version is included as `full_action_test.go` in this directory; it verifies the BIND ACCEPT and UNSTAKE CALL transcripts and copies two 16,224-byte signatures. It excludes canonical proto encoding and the staking state transition, which are small relative to verification.
+
+Go 1.26.5, CIRCL v1.6.5, native darwin/arm64, Apple M2 Pro (10 cores):
+
+| Path | Measurement | Gas equivalent at 16.7 ns/gas |
+|---|---:|---:|
+| KeyGen | 29.3 ms | — |
+| Sign | 308 ms | — |
+| Verify | 0.272 ms | 16,300 |
+| Bind ACCEPT + UNSTAKE CALL (2 verifies) | 0.539 ms | 32,300 |
+| Encode 2 × 16,224-byte signatures | ~0.5–1 µs | — |
+
+At `G_VERIFY = 30,000`, native M2 Pro has ~1.8× headroom on the verify primitive, consistent with the ~2× M3 Pro margin. The bind+unstake pair is charged 600,272 intrinsic gas; measured execution is ~32,300 gas equivalent, so the 16 gas/byte size component leaves substantial headroom.
+
+The same source cross-compiled to darwin/amd64 and run under Rosetta 2 on the same machine:
+
+| Path | Measurement | Gas equivalent |
+|---|---:|---:|
+| KeyGen | 286 ms | — |
+| Sign | 2.61 s | — |
+| Verify | 2.16 ms | 129,000 |
+| Bind ACCEPT + UNSTAKE CALL (2 verifies) | 4.16 ms | 249,000 |
+
+This is an ~8× slowdown versus native arm64 and is **not** evidence about native linux/amd64. It does show that benchmarking or shipping an x86_64 binary under emulation invalidates gas calibration. The full pair still fits the 600,272 intrinsic gas budget under emulation, but the `G_VERIFY` component alone is ~4.3× under-priced; do not use it as a standalone price for small payloads. Release validators MUST run native binaries.
+
+## Recovery-time note
+
+The §12 estimate of ~26 s per account (1024 key indices) is M3 Pro-specific. Native M2 Pro keygen measured 29.3 ms, giving ~30 s; the Rosetta build would take ~5 minutes. Wallet UX should treat recovery as tens of seconds on native hardware and minutes on emulated or slow devices.
+
 ## Correctness and vectors
 
 `go test -count=1 ./...` passed under Go 1.26.5. For all eight sets, the test covers key generation, deterministic and randomized pure signatures with the non-empty context, verification, repeated deterministic signature equality, and rejection of a changed message, signature, context, or public key. Cross-family tests reinterpret a serialized SHA2 public key as the same-size SHAKE parameter set and confirm rejection, so they exercise the hash-family boundary rather than just a length check.
@@ -38,7 +71,7 @@ CIRCL v1.6.5 bundles compressed ACVP prompt/result JSON for FIPS 205 key generat
 
 ## Reproduction
 
-The installed Go 1.26.5 toolchain in this workspace failed to resolve even standard packages in module mode (`package fmt is not in std`). The measurements above used **that Go 1.26.5 compiler in GOPATH mode** with temporary symlinks under `/tmp/slhdsa-gopath` to the already cached CIRCL v1.6.5, `golang.org/x/crypto` v0.54.0, and `golang.org/x/sys` v0.47.0 source trees. The ordinary module test was also run successfully with the locally cached Go 1.27.2 toolchain; its timings were not used in the table. `go.mod` and `go.sum` now list the transitive dependencies needed by the test import.
+The installed Go 1.26.5 toolchain in this workspace failed to resolve even standard packages in module mode (`package fmt is not in std`). The measurements above used **that Go 1.26.5 compiler in GOPATH mode** with temporary symlinks under `/tmp/slhdsa-gopath` to the already cached CIRCL v1.6.5, `golang.org/x/crypto` v0.54.0, and `golang.org/x/sys` v0.47.0 source trees. The ordinary module test was also run successfully with the locally cached Go 1.27.2 toolchain; its timings were not used in the table. `go.mod` and `go.sum` now list the transitive dependencies needed by the test import. The full-action cross-check ran in ordinary module mode with `GOTOOLCHAIN=go1.26.5`; no GOPATH workaround was needed.
 
 Commands used for the reported Go 1.26.5 run (after setting up those GOPATH symlinks):
 
@@ -46,4 +79,11 @@ Commands used for the reported Go 1.26.5 run (after setting up those GOPATH syml
 GO111MODULE=off GOPATH=/tmp/slhdsa-gopath GOCACHE=/tmp/slhdsa-gocache126 go test -count=1 ./...
 GO111MODULE=off GOPATH=/tmp/slhdsa-gopath GOCACHE=/tmp/slhdsa-gocache126 go test -run '^$' -bench 'BenchmarkSLHDSA/.*/(KeyGen|Sign)$' -benchtime=3x -benchmem -count=1 ./...
 GO111MODULE=off GOPATH=/tmp/slhdsa-gopath GOCACHE=/tmp/slhdsa-gocache126 go test -run '^$' -bench 'BenchmarkSLHDSA/.*/Verify$' -benchtime=200x -benchmem -count=1 ./...
+```
+
+Full-action cross-check (module mode, native arm64 and Rosetta amd64):
+
+```sh
+GOARCH=arm64 GOTOOLCHAIN=go1.26.5 go test -run '^$' -bench 'BenchmarkFullAction' -benchtime=10x -benchmem -count=3 ./...
+GOARCH=amd64 GOTOOLCHAIN=go1.26.5 go test -run '^$' -bench 'BenchmarkFullAction' -benchtime=3x -benchmem -count=3 ./...
 ```

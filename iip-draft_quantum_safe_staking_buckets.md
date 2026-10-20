@@ -306,11 +306,27 @@ ACCEPT = "IOTX-QSB-ACCEPT" || uint32 chainID || uint64 bucketIndex
   benchmark source, dependency versions and raw results are in
   `assets/iip-qsb/bench/` of this IIP. At the ~60 Mgas/s execution budget
   assumed by current Ethereum repricing work (≈16.7 ns/gas) this is ≈14,000 gas;
-  `G_VERIFY` adds a 2× margin for slower linux/amd64 validators. The value is
+  `G_VERIFY` adds a 2× margin for slower native linux/amd64 validators (not
+  emulated builds). The value is
   normative for this IIP. linux/amd64 measurements of the full action, not just
   the primitive, MUST be added to the assets before this IIP leaves Draft. Any
   increase MUST be made by amending this IIP and its vectors, not left to
   activation tooling.
+* **Independent cross-check (non-normative).** A standalone MVP simulator, built
+  natively for darwin/arm64 on an Apple M2 Pro (Go 1.26.5, CIRCL v1.6.5),
+  measured 0.272 ms/verify (≈16,300 gas at 16.7 ns/gas) and 0.539 ms for a bind
+  plus guarded UNSTAKE (two verifications). This is ≈1.8× headroom at
+  `G_VERIFY = 30,000`, consistent with the M3 Pro result. The same source
+  cross-compiled to darwin/amd64 and run under Rosetta 2 measured 2.16 ms/verify
+  (≈129,000 gas) and 4.16 ms for the pair: an ~8× emulation slowdown, not a
+  native amd64 calibration. The full-action intrinsic gas (600,272 for the pair)
+  still covers the emulated execution because 16 gas/byte dominates a 16 KB
+  action, but `G_VERIFY` alone is under-priced in that environment. Validators
+  MUST run native binaries, and native linux/amd64 measurements remain required
+  before this IIP leaves Draft; the full-action harness is
+  `assets/iip-qsb/bench/full_action_test.go`. Do not use `G_VERIFY` as a
+  standalone price for small payloads without re-measuring on the target
+  hardware.
 * Conformance vectors (§Test Cases) MUST give exact `size` and gas for every op.
   34 KB actions fit within the default p2p `MaxMessageSize`.
 
@@ -450,8 +466,10 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
   security requirement.
 * **Recovery** requires no extra backup: guard public keys are on chain. A
   restoring wallet derives `pk` for **every** `keyIndex` in `0 … 1023` for each of
-  its accounts (exhaustive, no gap limit; ≈ 26 s per account at the measured
-  keygen cost, resumable) and matches against the on-chain `publicKey` of each
+  its accounts (exhaustive, no gap limit; ≈ 26 s per account on the M3 Pro used
+  for the §8 benchmark, ≈ 30 s on a native Apple M2 Pro, and several minutes on
+  emulated or slow devices; resumable) and matches against the on-chain
+  `publicKey` of each
   guarded bucket it owns. It then continues allocating from the highest matched
   index + 1 (or any index — reuse is safe).
 
@@ -463,7 +481,9 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
   several devices or restore from a seed. Guarded operations are rare, so the
   larger signature is affordable.
 * **No ECDSA escape hatch, and no emergency mode.** Any ECDSA path to remove a
-  guard is a path an attacker could use. Losing the guard key is mitigated by
+  guard is a path an attacker could use. `clearGuard` is guard-authorized, not
+  an ECDSA path; it deliberately returns the bucket to ECDSA control and is
+  covered in Security Considerations. Losing the guard key is mitigated by
   deriving it from the seed (§12).
 * **Explicit operations instead of wrapping existing actions.** Wrapping the
   existing actions would require signing over a byte encoding that does not
@@ -504,6 +524,8 @@ The following must be covered before activation:
   expired endorsement records; transfers to and from candidate owners.
 * A clear followed by a legacy withdraw, and a clear followed by migration, each
   deleting the tombstone.
+* A bind by a compromised ECDSA owner before any guard exists, installing an
+  attacker-chosen guard key (the pre-bind compromise case).
 * Injected storage failures on bucket reads, account reads, and pool writes. Each
   must abort block processing rather than produce a receipt.
 * Vectors MUST be published with the reference implementation, before this IIP
@@ -531,7 +553,15 @@ A reference implementation in `iotex-core` will touch:
     addresses all remain ECDSA-controlled until later IIPs.
   * An elected candidate's operator identity remains ECDSA-controlled even when
     the votes for it are guarded.
-* **Bind timing.** Only buckets bound before a break are protected.
+* **Bind timing and pre-bind compromise.** Only buckets bound before a break are
+  protected. Binding is authorized by the current ECDSA owner, so an attacker
+  who compromises that key before a guard is bound can bind the bucket to an
+  attacker-chosen guard key. There is no protocol-level way to distinguish this
+  from the owner's bind; users must bind before compromise.
+* **ClearGuard is an opt-out.** A guard-signed TRANSFER with `clearGuard`
+  returns the bucket to ECDSA control. A later legacy withdraw or migration
+  deletes the tombstone. This is intentional and requires the guard key; it is
+  not a recovery path for a lost guard key.
 * **Lost guard key.** The bucket is permanently locked. This is mitigated by the
   seed-derived key (§12).
 * **Front-running.** A copied `GuardedBucketOp` executes the identical signed
