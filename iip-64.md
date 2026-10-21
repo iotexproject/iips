@@ -8,12 +8,12 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-05-14
-Updated: 2026-10-09
+Updated: 2026-10-21
 Requires: —
 Replaces: N/A
 ```
 
- **Editor's revision note (Revision 7, 2026-10-09).** This revision promotes the cross-family (lattice + hash) hybrid from a design option to a **MUST for consensus, bridge, and admin keys** (§4.1.4), and propagates the consequences: the PQ Key Registry now stores a two-key **bundle** for such addresses (§4.5), the consensus scheme is a required lattice+hash pair rather than hash-first-with-fallback (§4.7), and the §13 bandwidth/gas budgets reflect the added lattice half. Every change is enumerated in §19 (Changelog).
+> **Editor's revision note (Revision 8, 2026-10-21).** Adds a migration-latency/dependency inventory (§6.5), algorithm retirement and recovery state machines (§4.11.1–4.11.3), aggregation assurance and activation gates (§4.7.1), and custody-readiness gates (§5.4). Cross-family lattice AND hash authorization remains mandatory for consensus, bridge, and admin roles under §4.1.4. Aggregation is a separately gated optimization, not an assumed prerequisite for PQ migration. This remains a Draft; the new gates do not certify unresolved implementation details elsewhere in the proposal.
 
 ## Abstract
 
@@ -249,7 +249,7 @@ Meta's [engineering blog](https://engineering.fb.com/2026/04/16/security/post-qu
 | **Signature Scheme** | leanXMSS/WOTS (lean) + Falcon/ML-DSA/SLH-DSA (evaluating) | ML-DSA (proposed) | Scheme-agnostic (ZKP-based) | EdDSA DMS + PQ-NIZK | ML-DSA + zkSTARK | XMSS → SLH-DSA | ML-DSA-65 (users); hash-based-first consensus; zkSTARK migration |
 | **Security Level Target** | Not stated | Not stated | Not stated | Not stated | Not stated | Level 1–5 (per param) | **≥ Category 3 for long-lived keys** |
 | **Migration Model** | Account abstraction (opt-in) | Flag-day sunset (forced) | New tx type + off-chain proof | Seed-based DMS (opt-in) | Dual-path (revealed/hidden) | Hard fork (PQ-native) | Phased hybrid (incentivized) + bunker track |
-| **Consensus Layer** | leanXMSS + SNARK aggregation | N/A (PoW unchanged) | Not addressed | Not addressed | Not addressed | XMSS/SLH-DSA native | Hash-based-first (SLH-DSA/XMSS) + registry; ML-DSA-87 fallback |
+| **Consensus Layer** | leanXMSS + SNARK aggregation | N/A (PoW unchanged) | Not addressed | Not addressed | Not addressed | XMSS/SLH-DSA native | Mandatory lattice AND hash bundle; direct verification baseline |
 | **Backward Compatibility** | High (AA-based) | Moderate (soft fork) | High (new tx type) | High (same address) | High (one-way transition) | Low (new chain) | High (phased, incentivized) |
 | **Aggregation** | SNARK-based (leanVM) | N/A | Recursive zkSTARK | One-time proof | Not addressed | N/A | Recursive zkSTARK + precompile |
 | **ZK Proof System** | General-purpose | zkSTARK (proposed) | SP1/RISC0 zkVM | Ligetron zkVM | SP1 zkVM (STARK-native) | N/A | SP1 zkVM (STARK-native) |
@@ -299,7 +299,7 @@ This table is the **single source of truth** for algorithm identifiers and sizes
 | --- | --- | --- | --- | --- | --- | --- |
 | ML-DSA-44 | 0x01 | 2 | 1,312 | 2,420 | 2.16.840.1.101.3.4.3.17 | Active (bounded/low-value only) |
 | ML-DSA-65 | 0x02 | 3 | 1,952 | 3,309 | 2.16.840.1.101.3.4.3.18 | Active (default) |
-| ML-DSA-87 | 0x03 | 5 | 2,592 | 4,627 | 2.16.840.1.101.3.4.3.19 | Active (admin; consensus fallback) |
+| ML-DSA-87 | 0x03 | 5 | 2,592 | 4,627 | 2.16.840.1.101.3.4.3.19 | Active (admin; required consensus lattice component) |
 | SLH-DSA-SHA2-128s | 0x10 | 1 | 32 | 7,856 | 2.16.840.1.101.3.4.3.20 | Active (short-lived only) |
 | SLH-DSA-SHA2-128f | 0x11 | 1 | 32 | 17,088 | 2.16.840.1.101.3.4.3.21 | Active (short-lived only) |
 | SLH-DSA-SHA2-192s | 0x12 | 3 | 48 | 16,224 | 2.16.840.1.101.3.4.3.22 | Active (device identity) |
@@ -319,7 +319,7 @@ This IIP distinguishes two hybrids, which MUST NOT be conflated:
 * **Classical+PQ hybrid (transitional).** A signature requiring *both* a secp256k1 ECDSA signature and one PQ signature (Type `0x05`, Phase 2, §4.4). This protects against a break of *either ECDSA or that single PQ scheme*, but not against a break of both.
 * **Cross-family PQ hybrid (hybrid-robust).** A signature requiring **two PQ signatures from different assumption families** — e.g., ML-DSA (lattice) **and** SLH-DSA (hash). This is robust to a break of either family, including the AI-era scenario in which a *lattice* scheme is the one that falls while hash-based schemes stand.
 
-Per the current cryptographic consensus (Lindell), the following high-value key classes **MUST** use a hybrid-robust construction — a **2-of-2 (or 3-of-3) combination across independent assumptions** — and this is a normative requirement, not an option:
+As an explicit IoTeX defense-in-depth policy, the following high-value key classes **MUST** use a 2-of-2 lattice AND hash construction. This is a protocol policy choice, not a claim of unanimous cryptographic consensus:
 
 * **Consensus/delegate keys — MUST.** Each delegate key MUST be a 2-of-2 hybrid of a **hash-based** and a **lattice** scheme (e.g., SLH-DSA-192s or XMSS **and** ML-DSA-87). Both halves MUST verify on every proposal and attestation (§4.7).
 * **Bridge witness and admin/upgrade keys — MUST.** Every ioTube witness key and every contract admin/upgrade key MUST be hybrid-robust (§4.14); the bridge is the highest-value target and cannot tolerate a single-assumption failure.
@@ -544,7 +544,7 @@ Revision 3 made a hash-based scheme the consensus default; **Revision 7 requires
 **Scheme selection (REQUIRED — cross-family hybrid).** Delegate/consensus keys MUST use a **cross-family hybrid (lattice + hash)** (§4.1.4): every proposal and attestation MUST carry **both** a lattice signature (ML-DSA-87) and a hash-based signature (SLH-DSA-192s, or an audited XMSS/leanXMSS with the state-management controls above), and **both MUST verify** for the attestation to be accepted. The hash-based half is stateless (SLH-DSA) by default, or stateful (XMSS) where the state controls can be guaranteed.
 
 * **Phase 1 — PQ Key Registry for Delegates.** Each delegate registers a **cross-family hybrid key bundle** (lattice + hash, §4.5) in a dedicated delegate registry contract.
-* **Phase 2 — Dual-Signed Blocks.** Block proposals include both ECDSA and PQ signatures; attestations from other delegates include both signature types. Clients MUST verify both, and an attestation is accepted only if **both** are valid — so compromise of a single key is insufficient (the classical half remains a residual dependency until Phase 3; see §12.6).
+* **Phase 2 — Dual-Signed Blocks.** Block proposals include both ECDSA and PQ signatures; attestations from other delegates include both signature types. Clients MUST verify both, and an attestation is accepted only if **both** are valid — so compromise of a single key is insufficient (the classical half remains a residual dependency until the end-of-Phase-2 consensus transition; see §12.6).
 * **Consensus PQ-only transition (end of Phase 2, per §6.1).** After a governance-approved activation height, only PQ-signed block proposals and attestations are accepted; ECDSA-only delegates are excluded from the active set. (This is the *consensus* sense of "PQ-only". The account-level sense — `activatePQOnly`, §4.5 — and the execution-layer sense — PQ-only transactions with zero-filled legacy fields, §4.4 — are distinct and occur on their own schedules.)
 
 **Bandwidth and storage sizing (revised).**
@@ -554,16 +554,31 @@ Scheme                    per-block (24 delegates)   per-day        per-year
 ML-DSA-87                 111,048 B  (108 KiB)       1.92 GB/day    ~700 GB/yr
 SLH-DSA-SHA2-192s         389,376 B  (380 KiB)       6.73 GB/day    ~2.46 TB/yr
 XMSS/leanXMSS (~2.5 KiB, ESTIMATE)  ~60,000 B (est.)  (~59 KiB)  ~1.04 GB/day  ~380 GB/yr
-Hybrid (hash+lattice, MUST) ~468,800 B (~458 KiB)      ~8.1 GB/day    ~2.96 TB/yr
+Hybrid (ML-DSA-87 + SLH-DSA-192s) 500,424 B (488.7 KiB) 8.647 GB/day 3.156 TB/yr
 ```
 
-The trade-off is explicit: a stateless hash scheme (SLH-DSA) is the safest but heaviest; a stateful hash scheme (XMSS) is both safest and lightest but requires state discipline; ML-DSA-87 is lightest-but-one and carries the lattice-assumption risk. Because even the lightest option is ~60–110 KiB/block, **STARK-based signature aggregation (leanMultisig-style) is promoted from an optional Phase 2 optimization to a Phase 2 requirement** for whichever hash scheme is selected. Node operators MUST plan storage and archival policy (pruned attestation retention, light-client attestation) for the selected scheme.
+Direct verification of both signature components is the baseline acceptance rule. Signature aggregation MAY be enabled only under §4.7.1. PQ migration MUST NOT depend on an unreviewed aggregation design. An unaggregated deployment still requires measured evidence that block propagation, verification, storage, and consensus timing remain within approved limits; otherwise the affected activation MUST be deferred or its resource parameters explicitly revised.
 
-> **Cost of the hybrid requirement.** The mandatory cross-family hybrid roughly **doubles** consensus-attestation size versus the SLH-DSA-only option (SLH-DSA-192s 16,224 B + ML-DSA-65 3,309 B ≈ 19,533 B per signature × 24 ≈ 458 KiB/block, ≈ 8.1 GB/day, ≈ 2.96 TB/yr). This is the price of removing single-family risk from the delegate set; it makes the §4.7 aggregation requirement (native STARK, PQ-sound) more, not less, important.
+> **Illustrative hybrid cost, corrected in Revision 8.** ML-DSA-87 (4,627 B) + SLH-DSA-192s (16,224 B) = 20,851 signature bytes per signer. Assuming exactly 24 such signature pairs per block and a 5-second block interval: 500,424 B/block, 8,647,326,720 B/day, and 3,156,274,252,800 B per 365-day year. This is approximately 28.5% more signature bytes than SLH-DSA-192s alone, not a doubling. These are scenario calculations, not measured protocol traffic: they exclude keys, framing, additional consensus messages, retransmission, and failed rounds. Actual signer counts, block interval, and messages per round MUST be pinned to the target release in §6.5 before activation.
 
-> **PQ-soundness of the consensus aggregation path (clarified in Revision 4).** The consensus aggregation proof is verified by consensus nodes using a **native STARK verifier (no pairing wrapping)** — not the on-chain contract verifier discussed in §4.9. The consensus path is therefore PQ-sound by construction. The §4.9 Option 1 / Option 2 distinction applies only to the on-chain *migration/rescue* verifier.
+> **Native verification is necessary but not sufficient.** Consensus aggregation MUST NOT use a pairing-based proof wrapper as its authorization boundary. Native STARK verification removes that wrapper dependency, but does not by itself establish quantum soundness, circuit correctness, or implementation security. The additional requirements in §4.7.1 apply independently of the migration-contract verifier choices in §4.9.
 
 **BLS / IIP-52 transition.** IIP-52 (BLS signature aggregation, Zanzibar hard fork) reduces *classical* block-signature size by compressing signatures into a single 96-byte aggregate, but BLS is pairing-based and therefore neither quantum- nor AI-resistant. BLS is adopted as a **classical-era transition optimization**, not an end-state; the aggregation role is superseded by the PQ consensus design above. Implementations SHOULD keep the attestation format forward-compatible so the transition from BLS aggregation to PQ attestations does not require a further address-format change.
+
+### 4.7.1 Aggregation Assurance and Activation Gates
+
+**Security boundary.** A proof that replaces direct signature checks becomes part of authorization. A proof-system, circuit, or verifier failure can bypass both signature components without breaking either signature algorithm. An aggregate MUST prove the same acceptance predicate as direct verification, not merely possession of a signature-shaped object.
+
+Before activation, the aggregation deployment specification MUST publish:
+
+1. **Pinned construction:** proof-system and verifier versions, source commit and build hashes, verification-key or program/circuit identifiers, transcript/hash choices, fields, recursion layers, query counts, claimed classical and quantum security targets, and the analysis supporting those targets. A native STARK label is not a security proof.
+2. **Complete statement binding:** chain and protocol version, message/domain digest, block height and consensus round/step, committee epoch and authenticated committee root, ordered signer identities or a canonical bitmap, signature algorithms and bundle/policy versions, and the threshold/weight rule. Both lattice and hash signatures MUST verify for every counted signer; duplicates, unauthorized signers, stale committees, and cross-route bridge replays MUST be rejected.
+3. **Assurance evidence:** independent cryptographic and implementation reviews, arithmetic/circuit and serialization conformance tests, differential comparison against direct verification, malformed-proof and false-statement tests, fuzzing, and deterministic cross-platform verifier results. Published review findings MUST be resolved or explicitly block activation.
+4. **Resource envelope:** hardware/software and workload definitions; proof and original-signature sizes; peak memory; prover throughput and tail latency; worst-case invalid-proof verification; block propagation, consensus-round, and synchronization effects; and adversarial per-block limits. Protocol limits MUST be numeric, reproducible, and approved before activation; no unbenchmarked gas estimate is an activation constant.
+5. **Availability and failure procedure:** identify who can produce proofs, redundant prover operation, timeout behavior, and retention/availability of the underlying signatures and committee evidence for an explicitly specified interval. Missing or invalid proofs MUST NOT cause fail-open authorization. If an unaggregated mode is enabled, it MUST verify both original signatures within separately specified byte/work limits. If no valid mode is available, the operation MUST be rejected or the affected service safely halted under pre-authorized rules.
+6. **Suspected-unsoundness response:** provide an independently authenticated way to disable new aggregate-based authorizations. The disabling authority MUST NOT depend solely on the suspect proof verifier. Treatment of already finalized history MUST be a separate, explicit governance decision; disabling a verifier MUST NOT silently rewrite historical validity.
+
+Aggregation MAY activate only after the deployment passes §5.4 where custody is implicated, the relevant §6.5 dependency entries are ready, and governance approves exact activation parameters. Consensus-node aggregation, on-chain migration verification, and each remote bridge verifier are separate deployments and MUST be assessed separately. A prototype or a benchmark on another chain does not satisfy this gate.
 
 ### 4.8 DePIN Device Identity Migration
 
@@ -697,8 +712,44 @@ Agility is given teeth by an explicit **re-parameterization procedure**:
 * **Dry-run.** The network MUST exercise at least one non-critical algorithm-identifier rotation on testnet before mainnet PQ-only mode activates. Agility that has never been exercised is not agility.
 * **Substitution policy (revised in Revision 3).** The correct response depends on the *kind* of progress:
   * **Gradual weakening** of a parameter set (a few bits of margin lost): increase parameters first, then migrate to SLH-DSA. This is the sequence Revision 2 specified, and it remains correct for incremental progress.
-  * **Structural break** of an assumption family (the AI-era risk): parameter inflation is **not** a reliable remedy, because the improvement may be super-polynomial in the parameter. For **high-value keys** — consensus, contract admin, and **cross-chain bridge / ioTube keys** — the RECOMMENDED response is a **direct assumption-family replacement to hash-based signatures**, not parameter inflation. User-account keys MAY retain the parameters-first order.
-  * **Hash functions:** increase round counts before changing output byte-widths.
+  * **Structural break:** parameter inflation MUST NOT be presumed sufficient. The affected component MUST enter the lifecycle in §4.11.1. Hybrid-required roles MUST preserve the AND rule and follow §4.11.2; replacing lattice AND hash by hash-only is not an authorized automatic fallback.
+  * **Hash functions:** changes to a standardized hash, round count, or output width require a separately identified, analyzed profile and explicit activation; clients MUST NOT locally modify standardized primitives as an emergency workaround.
+
+#### 4.11.1 Algorithm Retirement State Machine
+
+**Scope and registry.** Lifecycle state MUST be recorded against an unambiguous scheme/parameter-set identifier and, where needed, a role, policy profile, verifier version, chain, or bridge route. A disabled proof verifier is not necessarily a broken signature algorithm. Each lifecycle entry MUST include its policy version, effective height or finalized destination-chain reference, decision authority, evidence reference, successor/recovery policy, and applicable notice period.
+
+| State | New registration and policy enrollment | Existing authorizations |
+| --- | --- | --- |
+| **ACTIVE** | Permitted under the current profile | Verified under the current profile |
+| **REGISTRATION_CLOSED** | New enrollments using the affected component prohibited; migration to an approved successor permitted | Remain valid unless separately restricted |
+| **RETIRING** | Same restrictions as REGISTRATION_CLOSED | Accepted only before the announced disabling boundary, subject to any explicit role restrictions |
+| **DISABLED** | Prohibited | New operations relying on the affected component rejected at and after the boundary |
+| **RECOVERY_RESTRICTED** | No ordinary enrollment using the disabled component | Only a specifically pre-authorized recovery predicate is accepted; ordinary spending/attestation is not reinstated |
+
+The normal path is ACTIVE → REGISTRATION_CLOSED → RETIRING → DISABLED; a pre-authorized emergency MAY skip notice states. RECOVERY_RESTRICTED is available only when a separately defined recovery predicate exists. DISABLED is terminal for an identifier; reintroduction requires a new explicit policy/identifier and review, not rollback of a status flag. Every change MUST be authenticated, versioned, and auditable. A precompile retained for historical or non-authorizing use MUST NOT override a disabled authorization policy.
+
+**Time semantics.** Validity of a new operation is evaluated at its inclusion/execution height, not its mempool-arrival time. Nodes MUST revalidate pending transactions and queued bridge claims at the boundary. A commitment created before retirement does not grandfather an ordinary signature unless the published recovery policy explicitly says so. Historical blocks continue to be checked under their historical rules; a current disablement MUST NOT retroactively invalidate finalized history. Bridge source-event finality and destination authorization validity are distinct checks.
+
+#### 4.11.2 Mandatory AND Bundles, Rotation, and Recovery
+
+**Normal operation.** Consensus, bridge, and admin authorizations MUST continue to satisfy lattice AND hash under §4.1.4. Registering an alternative key does not create an OR spending path. Partial verification, a missing signature, or disabling one component MUST NOT silently turn AND into OR or single-component authorization.
+
+**Rotation.** Ordinary replacement of either component MUST authenticate the exact successor bundle and policy using the current complete AND policy, prove possession of both successor keys, and bind the role, chain/contract or route, current and successor bundle hashes, monotonic policy version/nonce, and effective boundary. Updates MUST be atomic; duplicate, stale, or cross-context updates MUST fail. A compromised component alone MUST NOT rebind ownership.
+
+**Failure default.** If a required component becomes DISABLED, is unavailable, or cannot safely be used, affected ordinary authorizations MUST halt until an approved complete successor AND bundle can be established under a previously specified recovery authority. The surviving signature alone is insufficient. A stateful hash key MAY be replaced by a pre-bound stateless hash component only under an explicit authenticated policy; the lattice component remains mandatory.
+
+**Recovery authority.** A recovery predicate MUST be enrolled before the failure, bound to its account/role and exact actions, and secured by an approved cross-family AND recovery policy for hybrid-required roles. Recovery credentials MUST be operationally separated where practicable. A standing hash-only backup key in proposed §6.4 MUST NOT bypass §4.1.4. Where a family-wide break leaves no approved intact cross-family replacement, the default is halt; any surviving-component-only exception requires a separate explicit protocol-policy amendment, not an automatic transition or an interpretation of this IIP as advance permission.
+
+**Recovery availability.** Enrollment does not guarantee recovery: the deployment MUST specify what happens when recovery credentials are lost or also affected. No valid surviving authority means no automated ownership reassignment. Disputed or unrecoverable accounts remain subject to separately settled governance policy, not ad hoc operator discretion.
+
+#### 4.11.3 Retirement Authority and Emergency Coordination
+
+The CRC supplies evidence and advice; it does not itself change acceptance rules. Each deployment MUST identify the existing governance authority, exact approval threshold, notice/timelock rules, emergency scope and expiry, and the credentials securing decisions. A decision MUST NOT rely solely on an algorithm or aggregate verifier identified as compromised. If no unaffected authenticated authority is available, affected operations halt under the pre-specified rule; a new coordinated protocol decision is required to resume.
+
+Procedural response deadlines in §4.11 and §9 are readiness obligations, not guaranteed protection windows. A covert break may precede detection. Emergency preparation MAY begin immediately; enactment still requires an authenticated action under the published policy. Emergency powers MUST NOT automatically reactivate disabled identifiers or weaken mandatory AND authorization.
+
+For ioTube, lifecycle decisions MUST be tracked per (source chain, destination chain, verifier contract/version, asset/route, committee epoch). Each destination enforces its own finalized activation boundary; a source-chain vote alone does not update a remote contract. Cross-boundary pending claims MUST be revalidated. A route lacking a safe verifier or authority MUST pause affected authorization paths; value caps mitigate loss but do not make a vulnerable route PQ-safe.
 
 ### 4.12 Multisig and Account Abstraction
 
@@ -711,7 +762,7 @@ Contract accounts (Gnosis-Safe-style multisigs, ERC-4337 accounts) hold a substa
 ### 4.13 Rationale
 
 * **Why ML-DSA-65 (not -44) as the user default?** Because the horizon is a decade-plus and lattices carry a *concrete-security* risk (§2.3) that is best managed with headroom; Category 2 is retained only for bounded/low-value contexts. The cost is ~1 KiB more per transaction — far cheaper than a second migration.
-* **Why hash-based for consensus but ML-DSA for users?** Consensus is the highest-value, most-exposed signature and is produced by professional operators with controlled hardware, so the state-management cost of XMSS (or the size cost of SLH-DSA) is worth avoiding a structured assumption. User wallets sign from uncontrolled endpoints, where statefulness is unacceptable and lattice signature sizes are the practical choice.
+* **Why mandate lattice AND hash for high-value roles?** IoTeX chooses protection against a single signature-component forgery before detection, accepting added resource and custody costs. Shared dependencies and implementation failures remain relevant (§12.9). Ordinary user accounts MAY use a single supported scheme; they are not a fallback authorization path for hybrid-required roles.
 * **Why is SLH-DSA co-primary rather than a fallback?** Per §1.5 and §3.1, a deployer may reasonably prefer *no structured assumptions*. Making SLH-DSA an equal-status option lets that deployer act without waiting for a protocol change.
 * **Why not FN-DSA/Falcon?** Floating-point Gaussian sampling and side-channel sensitivity make it a poor fit for IoT and for constant-time client code; it is reserved for a future IIP.
 * **Why not an EdDSA-style seed migration?** IoTeX is secp256k1/ECDSA; the deterministic-seed property that makes Sui's DMS work is absent (§3.4). The mnemonic-preimage circuit (§4.9, Path B) is the closest analogue and is explicitly bounded.
@@ -775,6 +826,21 @@ All client-side ML-DSA and SLH-DSA code MUST use constant-time, masked implement
 * **ioPay (mobile wallet):** PQ key generation and secure-enclave storage; TEE-based proving service for migration proofs; MUST default to `registerWithProof` for unexposed accounts (§4.5).
 * **Hardware wallet integration:** add ML-DSA support. In the interim, use a hybrid approach where the hardware wallet signs the ECDSA component and a software companion generates the PQ signature — with an explicit warning that this hybrid provides no on-device PQ protection for the PQ half.
 
+### 5.4 Custody and Signer Readiness Gates
+
+**Separate concepts.** A lattice AND hash bundle combines cryptographic assumptions. A multisig threshold counts distinct authorizers. MPC/threshold signing distributes the generation of an individual signature. None implies either of the others. For a t-of-n hybrid committee, every counted authorizer MUST satisfy both components of its authenticated bundle unless a separately reviewed construction proves the same policy. Choosing t lattice signers and unrelated t hash signers is not automatically equivalent.
+
+Before a role is mandated to migrate, the responsible deployment owner MUST publish a readiness matrix for both components, including:
+
+* **Pinned implementations and hardware:** exact HSM/secure-element/firmware or protected-software versions, supported parameters, key generation/import/export constraints, attestations, vendor dependencies and relevant assurance scope. Hardware support MUST NOT be inferred from an algorithm name or roadmap. Any software substitution MUST have an explicitly accepted custody risk assessment.
+* **Key ceremonies and authorization:** entropy and hedged-signing policy, component separation, operator access controls, threshold membership and reconfiguration, proof of possession, message/bundle binding, logs, and a compromise/rotation runbook. A purported MPC protocol MUST identify its own security model, corruption threshold, setup, abort and concurrency behavior, and independent review; mature MPC support MUST NOT be assumed for every PQ scheme.
+* **Measured service readiness:** signing/verification latency and tail behavior, peak memory, throughput for ordinary and mass-migration workloads, and unavailable-provider behavior. Results MUST use the intended device/server and key-protection configuration, not an unrelated reference benchmark.
+* **Stateful-signer controls:** durable one-time-index allocation before signature release; atomic update/fencing against concurrent signers; crash, retry and ambiguous-write handling; non-rollbackable backups and restore; partition, failover and disaster-recovery tests; exhaustion tracking and advance rotation. A chain scan alone cannot reconstruct signing state because unpublished signatures may have consumed indices.
+* **Stateless operating mode:** every stateful deployment MUST also support an audited stateless-only configuration. Fallback activation and its keys MUST be pre-bound and exercised under §4.11.2. If state is uncertain, the stateful signer MUST stop; operators MUST NOT guess an index or restore old state and resume. Replacing the hash component with a stateless alternative MUST retain the lattice AND requirement.
+* **Recovery exercise:** test lost/unavailable keys, corrupted or stale backups, signer unavailability, committee changes, and provider outage. Demonstrate complete-bundle rotation and policy replay rejection on testnet before the corresponding mainnet role activates.
+
+**Acceptance.** Consensus requires readiness of the required active committee and its authenticated replacement procedure. Bridge readiness is per route and includes remote upgrade authority, verifier, witnesses, token-control paths and pause controls. Admin-role readiness covers every upgrade, mint, release, emergency and recovery authority in the declared scope; an ECDSA-only bypass prevents a complete PQ-readiness claim. Gaps MUST have owners and blocking status in §6.5. Missing custody capability blocks only the dependent rollout, not independent PQ engineering work. No gate is deemed satisfied merely because this IIP is published.
+
 ## 6. Migration Roadmap
 
 ### 6.1 Five-Phase Migration Plan
@@ -783,7 +849,7 @@ All client-side ML-DSA and SLH-DSA code MUST use constant-time, masked implement
 | --- | --- | --- | --- |
 | **Phase 0: Foundation** | 2026 Q3 – 2027 Q2 | Deploy infrastructure without protocol changes | Publish this IIP and complete review; implement ML-DSA/SLH-DSA in `iotex-core` as an optional module; deploy PQ Key Registry and STARK verifier contracts on mainnet (voluntary registration only); **launch iPACT commitment generation and publish the recommended cutoff** (§4.10); launch TEE proving service; integrate PQ key generation into ioPay (opt-in); formal verification of the PQ precompile; hybrid PQ-TLS; publish DePIN PQ Device Identity Standard; **publish the §2.4 exposure census** |
 all 24 delegates MUST register cross-family hybrid (lattice + hash) keys (§4.7);
-| **Phase 2: Hybrid Enforcement** | 2028 Q3 – 2030 Q2 | Make PQ the primary authentication mechanism while retaining compatibility | Soft deadline (2028 Q3): new accounts in official wallets default to PQ-capable; hard deadline (2029 Q3): transactions to PQ-registered accounts MUST use Type `0x05`; consensus transition (2030 Q1): PQ-only consensus, ECDSA-only delegates excluded; deploy recursive STARK aggregation; expand DePIN migration; publish full security audit |
+| **Phase 2: Hybrid Enforcement** | 2028 Q3 – 2030 Q2 | Make PQ the primary authentication mechanism while retaining compatibility | Soft deadline (2028 Q3): new accounts in official wallets default to PQ-capable; hard deadline (2029 Q3): transactions to PQ-registered accounts MUST use Type `0x05`; consensus transition (2030 Q1): PQ-only consensus, ECDSA-only delegates excluded; evaluate aggregation under §4.7.1 independently of baseline PQ activation; expand DePIN migration; publish full security audit |
 | **Phase 3: Legacy Sunset** | 2030 Q3 – 2031 Q4 | Restrict and eventually eliminate classical ECDSA | Soft fork (2030 Q3): legacy types accepted only from senders without a registered PQ key; 18-month grace period with aggressive outreach (automated migration, exchange partnerships, device OTA); iPACT rescue and zkSTARK rescue remain open; **governance vote** on unmigrated accounts (preserve / time-locked freeze / burn) per §14 |
 | **Phase 4: PQ-Native** | 2032 Q1 – 2033 | Complete the transition to PQ-only operation | Hard fork (2032 Q1): legacy ECDSA transactions no longer processed; rescue paths remain for late migrants with valid pre-cutoff iPACTs; remove ECDSA from the critical consensus path (retain `ecrecover` only under the §11 deprecation schedule); evaluate STARK aggregation for execution-layer verification; evaluate emerging PQ algorithms via §4.11; publish final migration report |
 
@@ -801,20 +867,42 @@ The emergency track activates on either a quantum trigger (credible evidence of 
 
 ### 6.3 Dependency Order
 
-Phase 1 depends on the Phase 0 registry and verifier being live and audited; Phase 2's consensus transition depends on delegate key registration completing in Phase 1; Phase 3's sunset depends on the iPACT/rescue contracts being live and the exposure census (§2.4) being published so that the "who is left" population is known. A phase MUST NOT activate if its dependencies are unmet.
+Dependencies are tracked per capability and role under §6.5. Before a role activates, its authorization, custody and resource gates MUST pass; proof-mediated operations additionally require the applicable verifier assurance. Baseline direct PQ verification MAY activate independently of optional aggregation or unresolved dormant-fund policy. Legacy sunset requires approved recovery/eligibility and failure policy for affected accounts. A deployment MUST NOT claim a gate has passed without published evidence.
 
 ### 6.4 Pre-Staged Recovery Mode (proposed)
 
-> **Status: proposed, not yet normative.** This subsection records a mechanism proposed by Haseeb Qureshi ("Cryptographic Recovery Mode") and places it within this IIP's framework. It requires a governance decision (§14) before becoming normative. Contested elements are flagged; this IIP does **not** adopt them silently.
+> **Status: proposed recovery-mode design, not activation authority.** Subsection §6.4 records design options. The already normative AND policy and the lifecycle/assurance constraints in §4.11 and §5.4 apply to any implementation; this section does not silently approve a switch or relaxation of authentication.
 
 The emergency track (§6.2) assumes a decision can be taken and a fork shipped when a break occurs. If a classical/AI break arrives with no warning (§9.2), that may be too slow. The proposed mechanism pre-stages the response:
 
-* **6.4.1 Pre-staged hash-based backup key.** At a designated protocol upgrade, every address is prompted to register a **hash-based backup key** (e.g., SLH-DSA), creating a mapping `address → backup_pq_key` (§4.5). Initially optional, later possibly required. This is *complementary* to iPACT (§4.10): iPACT proves control of a *legacy* key at a past time; the backup key is a *new* PQ key that can authorize transfers if the legacy key is compromised.
-* **6.4.2 The crisis switch.** A pre-deployed switch forces addresses into recovery mode. **Governance safeguard (this IIP's addition):** the switch MUST NOT be flippable "by signaling alone"; it MUST be gated by a super-majority delegate vote with a published timelock, and MUST be time-limited and reversible by governance (§10). A freely-flippable switch is itself a governance weapon and a centralization risk — the mechanism is only as safe as its activation rule.
+* **6.4.1 Pre-staged backup credentials (proposed).** User accounts MAY pre-enroll a hash-based backup under an explicit profile. For consensus, bridge and admin roles, a hash-only backup MUST NOT bypass §4.1.4; pre-enrolled recovery MUST comply with §4.11.2. Binding, enrollment time, allowed actions and key availability MUST be tested. A backup is distinct from an iPACT historical-control commitment.
+* **6.4.2 The crisis switch (proposed).** Any pre-staged switch MUST obey the lifecycle, decision-authentication and activation-boundary requirements of §4.11.1–4.11.3. Disabling an unsafe authorization path does not authorize reactivation of a disabled algorithm or conversion of a mandatory AND bundle to OR. Emergency-control expiry cannot restore a cryptographically disabled path; resumption needs an approved successor policy.
 * **6.4.3 Straggler recovery.** For accounts that did not pre-stage a backup key: (a) mnemonic/seed holders can prove it via the §4.9 Path B circuit; (b) never-signed ("bunker") accounts can recover via the address-binding circuit. A **holding-scaled proof-of-work timer** (difficulty growing over time) has been proposed to let owners outrace an attacker; **this IIP flags it as contested** — after a *public* break the attacker can also compute the key, so the contest reduces to a PoW race whose only owner edge is timing, and scaling difficulty *by holdings* makes large accounts *harder* to rescue, which is backwards from the goal of protecting the largest holders. It SHOULD NOT be adopted without further analysis.
 * **6.4.4 Crisis cadence.** The proposer argues that in a crisis "speed beats decentralization." This IIP records the tradeoff but bounds it: any relaxation of governance norms MUST be (a) pre-specified, (b) time-limited, and (c) subject to post-hoc review (§10), so that crisis powers do not become permanent.
 
 **Adopted vs. open.** This IIP adopts the *principle* of a pre-agreed, pre-staged recovery plan. It leaves the switch's activation rule, the straggler mechanics, and the governance cadence to §14 as open questions (§18.12–13).
+
+### 6.5 Migration-Latency and Dependency Inventory
+
+**Purpose and measure.** Phase 0 MUST establish a versioned inventory of authentication, proof verification, key exchange, key storage and recovery dependencies. The migration lead maintains it with the responsible component and route owners. It MUST be updated before every activation and after material vendor, contract, committee or incident changes. Security-sensitive details MAY be redacted publicly, but readiness evidence and blocking conditions MUST remain reviewable.
+
+Each entry MUST include: component/role; chain and contract/address where applicable; deployed code/firmware and verifier versions; scheme/parameters and bundle/policy identifiers; key-exposure status; controlling/upgrade/recovery authority; HSM, wallet, MPC and vendor dependencies; deployment mechanism; affected assets/operations; successor and rollback constraints; and an accountable owner.
+
+**Latency fields MUST be measured or explicitly unknown:** notice/decision time, client/vendor lead time, rollout time, chain-finality delay, remote-chain coordination, and the time until the old path is no longer accepted everywhere in scope. Entries MUST distinguish measured drill results from planning targets and confidence/assumptions. A status of unknown is not zero latency. The exposure interval starts when an attacker can exploit the weakness, potentially before detection; no public-response SLA bounds covert exposure.
+
+| Component class | Dependency/latency that MUST be recorded | Activation evidence |
+| --- | --- | --- |
+| Active user accounts and contract wallets | Wallet/hardware/custody support, registry enrollment, complete-policy rotation, actual disabling of old paths | Signing and recovery tests; migration census with defined denominator |
+| Consensus and aggregate verification | Client releases, committee replacement, round/message frequency, decision/finality rules, prover/verifier and resource limits | §4.7.1 and §5.4 evidence; coordinated testnet activation and retirement drill |
+| Dormant/hidden/exposed legacy accounts | Owner participation, pre-break commitments, usable secret asymmetry, PQ-sound verifier and claim costs | Explicit rescue eligibility and failure cases; no assumption of universal recoverability |
+| ioTube, separately for every route/direction | Source finality, destination verifier, witnesses and bundle policy, upgrade/timelock authorities, token controls, outstanding claims | Route-specific tests and finalized retirement boundary on every destination |
+| Transport and stored confidential data | Peers/vendors, classical+PQ key-establishment profile, retention and recorded ciphertext exposure | Negotiation/interoperability tests; explicit statement that later upgrades cannot protect past recorded ciphertext |
+
+**Bridge inventory.** Chain names alone are insufficient. A route record MUST identify both endpoints, contract and verifier hashes, assets, committee epoch/threshold, all admin and emergency paths, measured gas/compute limits, and who can authorize and execute upgrades on each chain. Registration in IoTeX's registry does not itself authenticate a foreign-chain key set. Remote verification or committee-root synchronization MUST have its own authenticated specification. Unsupported destinations are blocking dependencies for that route.
+
+**Activation discipline.** PQ verifier/registry development, wallet integration and custody work SHOULD proceed independently of unresolved dormant-asset policy. A sunset or restrictive asset-policy activation MUST wait until its eligibility, notice, failure and recovery consequences are approved. Neither optional aggregation nor an unfinished rescue mechanism is a blanket prerequisite for all PQ infrastructure. Before each affected role activates, its complete authorization encoding, registration/rotation semantics, numeric resource limits, custody gates and retirement boundary MUST be fixed and tested. This includes resolving the draft's illustrative single-key interfaces into a concrete hybrid-bundle encoding and dispatch rule; prose about a bundle does not implement that rule.
+
+**Evidence package.** Governance MUST publish the inventory version, gate results, remaining blockers and approved activation heights. Baseline PQ activation and aggregation activation are separate decisions. Any route/role lacking a safe path MUST remain inactive or paused as specified; caps and operational promises MUST NOT substitute for an unmet cryptographic gate.
 
 ## 7. IoTeX PQC Maturity Model
 
@@ -870,7 +958,7 @@ A break of elliptic-curve or lattice assumptions could arrive **without any quan
 
 C4 exists because, for a purely classical break, the **first observable evidence may be an attack, not an announcement**. After T-break there is no separate "hardware" signal to wait for.
 
-The governance body (§14) authorizes the corresponding action on the CRC's recommendation; for C1/C3/C4 the §6.2 emergency clock starts immediately, without waiting for a governance vote.
+The governance body (§14) authorizes acceptance-rule changes under §4.11.3. C1/C3/C4 can immediately start investigation, operator coordination and preparation; they do not authorize unauthenticated status changes, automatic AND-to-OR transitions, or bypass of published emergency controls.
 
 ## 10. Emergency Track Governance
 
@@ -947,7 +1035,7 @@ The bridge is the one component whose compromise is immediately and fully lossy:
 
 ### 12.9 Multi-Assumption Robustness (new in this revision)
 
-The Phase-2 hybrid (ECDSA + one PQ scheme) is a *floor*; **for consensus, bridge, and admin keys a cross-family PQ hybrid (lattice + hash) is REQUIRED (MUST)** (§4.1.4).
+For fixed authenticated key bundles, an identical domain-separated message, and correctly enforced AND verification, forging one signature component alone is insufficient to authorize an operation. The mandatory lattice AND hash profile (§4.1.4) diversifies signature assumptions; it does not establish statistical independence or protect against every shared hash failure, key-registration flaw, custody compromise, malicious upgrade, or unsound aggregate proof. No numerical probability of simultaneous failure is asserted. Proof-mediated authorization MUST satisfy §4.7.1; all lifecycle changes MUST satisfy §4.11.1–4.11.3.
 
 ## 13. Performance Analysis and Gas Economics
 
@@ -1035,6 +1123,10 @@ Each vector is a JSON object:
 
 and one that MUST be rejected once the cap is reached; a **bridge authorization** (`bridge_digest`) vector across two distinct routes that MUST NOT be replayable across routes.
 
+
+
+**Revision 8 conformance additions.** Tests MUST cover every allowed/disallowed lifecycle transition; registration closure; inclusion immediately before/at/after disabling height; mempool revalidation; historical validation; policy replay and atomic rotation; missing/invalid AND components; unauthorized recovery; loss of recovery credentials; bridge destination activation skew and in-flight claims; and stateful-signing crash/restore/fencing failures. Aggregate statements MUST be differentially checked against direct verification with wrong epochs, duplicate signers, wrong bundles, insufficient thresholds, missing components and unavailable evidence. Every deployed signer/verifier configuration MUST have cross-platform or target-hardware results and a published resource envelope. These are test requirements, not claims that vectors or implementations already exist.
+
 ## 17. Reference Implementation
 
 To be developed as open-source public goods (repository links MUST be added here before Phase 1):
@@ -1065,11 +1157,22 @@ To be developed as open-source public goods (repository links MUST be added here
 11. **Remote-chain bridge verification:** which chains can host a native FRI/STARK verifier for the bridge's outbound path, and at what gas cost — or must outbound value be capped until then? (§4.14, §12.8)
 12. **Crisis-switch activation rule:** what super-majority and timelock should gate the §6.4 crisis switch, and how is it kept reversible rather than becoming a standing governance weapon?
 13. **Straggler recovery mechanics:** is the holding-scaled PoW timer (§6.4.3) sound, given that a public break lets the attacker compute keys too, and that difficulty-scaling-by-holdings inverts the protection?
-14. **Hybrid-robust scope:** which key classes adopt a cross-family hybrid (lattice + hash), and what size/gas budget is acceptable? (§4.1.4, §12.9)
+14. **Hybrid implementation profile:** the mandatory role scope is settled by §4.1.4; exact bundle encoding, verifier dispatch, custody support, and measured resource budgets MUST be resolved before the relevant activation (§4.7.1, §5.4).
+
+15. **Activation blockers:** the concrete hybrid encoding/ABI, authenticated retirement controls, numeric work/byte limits and role/route custody evidence MUST be resolved under §6.5; open questions do not waive these gates.
 
 ## 19. Changelog
 
 
+
+### Revision 8 (2026-10-21)
+
+50. Added §6.5 migration-latency/dependency inventory with accountable owners, measured versus unknown latency, per-route ioTube dependencies, activation evidence and separate technical versus dormant-policy tracks.
+51. Added §4.11.1–4.11.3 retirement states, inclusion-height and historical semantics, atomic authenticated bundle rotation, replay protection, fail-closed recovery and independently authenticated emergency coordination. Mandatory lattice AND hash remains unchanged; no automatic OR or single-component fallback.
+52. Added §4.7.1 aggregation assurance: exact construction and full hybrid statement, independent review, numeric adversarial limits, prover/evidence availability and independently authenticated disablement. Removed mandatory aggregation as a blanket migration prerequisite and the unsupported “PQ-sound by construction” claim.
+53. Added §5.4 custody gates distinguishing hybrids, multisig and MPC, with pinned HSM/software support, component-specific custody assurance, stateful-signing durability/fencing, stateless operating mode and recovery drills.
+54. Reconciled roadmap, recovery-mode proposal, settled hybrid scope and trigger authority with the new gates; expanded conformance tests. Corrected the ML-DSA-87 + SLH-DSA-192s illustrative bandwidth calculation and removed the erroneous doubling claim.
+55. These additions are normative readiness requirements, not a claim of completed implementation or exhaustive remediation of earlier draft sections. Prior changelog entries describe historical revisions and may be superseded by current normative text.
 
 ### Revision 7 (2026-10-09)
 
@@ -1161,6 +1264,12 @@ Incorporates the external technical review of Revision 2.
 18. Added §1.5 separating threat-model **assumptions** from **findings**, in light of the public debate (Drake, Buterin, Lindell), and added the lattice concrete-security row to the §2.3 risk matrix.
 19. Strengthened §12.3 (hedged signing, RFC-6979 for the classical half) and §12.6 (hybrid is only as strong as its ECDSA half until Phase 2).
 
+## Design Inputs for Revision 8
+
+* [Coinbase: Working Together on Bitcoin’s Post-Quantum Readiness](https://www.coinbase.com/blog/working-together-on-btc-post-quantum-readiness) — operational evaluation, custody/MPC and stateful-signing concerns; Bitcoin-specific discussion input, not an IoTeX implementation endorsement.
+* [Conor: What do we actually know?](https://www.conor.computer/blog/what-do-we-actually-know) — migration latency, algorithm retirement and proof-system dependencies. Its individual cryptanalytic examples are not adopted as verified findings by this revision.
+* [Yehuda Lindell: alternative lattice/hash paths with rapid shutdown](https://x.com/lindellyehuda/status/2112802284682022957) — failover discussion; this IIP retains its distinct mandatory AND policy for designated high-value roles.
+
 ## Copyright
 
-Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).
+Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/). 
