@@ -1,8 +1,8 @@
 ```
-IIP: <to be assigned>
+IIP: 65
 Title: Quantum-Safe Staking Buckets
 Author: Raullen Chai (@raullenchai)
-Discussions-to: https://github.com/iotexproject/iips/pull/86
+Discussions-to: https://github.com/iotexproject/iips/pull/87
 Status: Draft
 Type: Standards Track
 Category: Core
