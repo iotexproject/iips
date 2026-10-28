@@ -1,6 +1,6 @@
 ```
 IIP: 65
-Title: Quantum-Safe Staking Buckets
+Title: Bunker Mode: Quantum-Safe Staking Buckets
 Author: Raullen Chai (@raullenchai), Chen Chen (@envestcc)
 Discussions-to: https://github.com/iotexproject/iips/pull/87
 Status: Draft
@@ -13,12 +13,46 @@ Requires: 59, 61, 64
 
 ## Simple Summary
 
-Give every IOTX holder a post-quantum vault that IoTeX can ship on its own: a
-native staking bucket locked with a second, hash-based key (SLH-DSA, NIST
-FIPS 205). Once a bucket is locked, nothing that moves, re-owns, unstakes, or
-re-votes it is accepted unless that key has signed it. An ECDSA signature alone
-is no longer enough. Staked IOTX then stays safe even if secp256k1 is broken,
-whether by a quantum computer or by an AI-assisted mathematical result.
+A doomsday bunker for staked IOTX. Nobody knows when a quantum computer, or an
+AI-assisted mathematical result, will break the ECDSA keys that protect IoTeX
+accounts today. A post-quantum upgrade for ordinary accounts needs Ethereum,
+exchanges, wallets, and hardware vendors to move together, and that will take
+years. IoTeX does not have to wait for them to build a shelter.
+
+This IIP lets any holder put a native staking bucket into **bunker mode** by
+locking it with a second, hash-based key (SLH-DSA, NIST FIPS 205). Once a bucket
+is locked, nothing that moves, re-owns, unstakes, or re-votes it is accepted
+unless that key has signed it. An ECDSA signature alone is no longer enough.
+Staked IOTX then stays safe even if secp256k1 is broken.
+
+### The bunker in three steps
+
+1. **Go in now.** The owner binds a guard key to the bucket, once, while the
+   ECDSA key is still safe. The bunker only protects what is inside when the
+   storm hits, so earlier is better.
+2. **Wait it out.** Inside, the bucket keeps voting and earning staking
+   rewards. The door is heavy: a guard signature is about 16 KB and is made
+   offline. That is acceptable because the door is rarely opened, a few times a
+   year at most.
+3. **Come out later.** When post-quantum accounts exist (IIP-64) and the
+   ecosystem has caught up, the owner signs one guard operation to move the IOTX
+   out.
+
+```mermaid
+flowchart LR
+    now["Today<br/>bucket protected by ECDSA only"]
+    bunker["Bunker mode<br/>guard key bound<br/>keeps voting and earning"]
+    out["Later<br/>post-quantum accounts (IIP-64)"]
+    storm(["Q-day or an AI-assisted break:<br/>ECDSA falls"])
+    now -->|"1. BindBucketGuard, once"| bunker
+    bunker -->|"3. guard-signed WITHDRAW or TRANSFER"| out
+    storm -.->|"blocked: ECDSA alone cannot move it"| bunker
+    storm -.->|"exposed"| now
+```
+
+*Figure 1. Go in early, wait it out, and come out with the guard key. "Bunker
+mode" is the informal name for a guarded bucket; the specification below says
+"guard".*
 
 ## Abstract
 
@@ -62,7 +96,7 @@ flowchart LR
     op -->|"verified against the guard record"| B
 ```
 
-*Figure 1. Once a bucket is guarded, the ECDSA key can only add funds to it.
+*Figure 2. Once a bucket is guarded, the ECDSA key can only add funds to it.
 Every operation that moves, re-owns, unstakes, or re-votes the bucket needs a
 signature from the guard key. Anyone can submit that signed operation.*
 
@@ -99,7 +133,7 @@ signature from the guard key. Anyone can submit that signed operation.*
            Exit : Holders move funds to post-quantum accounts under IIP-64
    ```
 
-   *Figure 2. The vault only protects what is inside it when the break happens.*
+   *Figure 3. The vault only protects what is inside it when the break happens.*
 
 3. **Low-frequency operations can afford conservative cryptography.** Owners
    act on a bucket a few times a year, unlike EOA or contract signatures that a
@@ -499,7 +533,7 @@ sequenceDiagram
     end
 ```
 
-*Figure 3. Signing and submission are separate. The node evaluates the steps
+*Figure 4. Signing and submission are separate. The node evaluates the steps
 in this order, and the order decides the receipt status.*
 
 The step order fixes which receipt status is reported when several checks fail.
@@ -548,7 +582,7 @@ stateDiagram-v2
     Deleted --> [*]
 ```
 
-*Figure 4. Counters never decrease while the bucket exists, so a signature
+*Figure 5. Counters never decrease while the bucket exists, so a signature
 from an earlier key or an earlier binding can never execute again. Only a
 guard signature leads out of the Guarded state.*
 
@@ -944,6 +978,8 @@ changes listed under Revision History.
 
 **Draft 2 (2026-10-28)** changes Draft 1 as follows:
 
+* Title and Simple Summary: "Bunker Mode" name and the three-step bunker
+  picture (go in now, wait it out, come out later).
 * Motivation and Rationale: the vault framing; why buckets come before EOAs; the
   low-frequency principle and the parameter comparison; why hash-based
   (a hedge against both quantum computers and AI-accelerated cryptanalysis of
