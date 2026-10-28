@@ -713,6 +713,61 @@ index; reuse is safe).
   Until then, the guard protects principal and votes, which is the asset worth
   protecting.
 
+### Why hash-based: a hedge against quantum computers and AI-accelerated mathematics
+
+A vault should rest on the assumption that is least likely to fail. There are
+two separate ways a signature scheme can fail, and they point to the same
+choice.
+
+1. **Quantum computers.** Shor's algorithm breaks elliptic-curve signatures,
+   including the ECDSA keys that control buckets today. ML-DSA (lattice-based,
+   FIPS 204) and SLH-DSA (hash-based, FIPS 205) both resist every known quantum
+   algorithm. On this threat alone, either would do.
+2. **Mathematics, now accelerated by AI.** ECDSA, ML-DSA, and FN-DSA (Falcon)
+   are secure because a specific *algebraic* problem is believed to be hard:
+   discrete logarithms on an elliptic curve, or short vectors in a structured
+   lattice (Module-LWE/SIS, NTRU). Algebraic structure is exactly what
+   cryptanalysis exploits, and a better algorithm needs no new hardware. This has
+   happened to schemes deep in the NIST process itself: in 2022 the
+   isogeny-based SIKE (a round-4 candidate) was broken by a classical attack that recovers a key in
+   about an hour on a single core ([Castryck–Decru, ePrint
+   2022/975](https://eprint.iacr.org/2022/975)), and the multivariate Rainbow
+   signature (a round-3 finalist) fell to a key-recovery attack that takes about a weekend on a
+   laptop ([Beullens, ePrint 2022/214](https://eprint.iacr.org/2022/214)).
+   Older precedents include the number field sieve, which forced RSA keys to
+   grow several-fold. AI-assisted mathematical research raises the rate at which
+   such results can appear. Vitalik Buterin made this argument for Ethereum in
+   October 2026, writing that "there is a good chance that the concrete security
+   of lattices will take serious hits" and concluding "hash-based >
+   lattice-based, in those situations where hash-based is possible at all"
+   ([post, 2026-10-07](https://x.com/VitalikButerin/status/2107976296320106851)).
+   Ethereum's own post-quantum roadmap has moved toward hash-based signatures
+   for the same reason.
+
+SLH-DSA is the scheme that hedges both threats. Its security reduces only to
+standard properties of the hash function (preimage and second-preimage
+resistance, and pseudorandomness), and it has no algebraic structure to attack.
+The best known attacks are generic: Grover's algorithm gives at most a quadratic
+speedup, which the NIST security categories already account for. A practical
+break of SHA-2 at this level would also break most of the internet's existing
+security infrastructure, so it is the most conservative assumption available.
+
+| Scheme | Security rests on | Shor (quantum) | Algebraic or AI-assisted breakthrough | Signature |
+|---|---|---|---|---|
+| ECDSA secp256k1 (today) | Elliptic-curve discrete log | **Broken** | Exposed | 64–65 B |
+| ML-DSA-65 (FIPS 204), cat. 3 | Module-LWE / SIS lattices | Resists | Exposed | 3,309 B |
+| FN-DSA / Falcon (FIPS 206) | NTRU lattices | Resists | Exposed | 666 B (cat. 1), 1,280 B (cat. 5) |
+| **SLH-DSA-SHA2-192s (FIPS 205), cat. 3** | **Hash function only** | **Resists** | **No structure to attack** | **16,224 B** |
+
+The price is size: an SLH-DSA-192s signature is about five times an ML-DSA-65
+signature. Bucket operations happen a few times a year, so this IIP pays that
+cost to get the narrowest assumption (Motivation 3). This is a hedge, not a
+claim that lattices will fall. Lattice schemes remain the practical choice for
+high-frequency signing, and IIP-64 keeps identifiers for them for EOAs and
+other uses. The same argument also applies to ECDSA: a classical break may
+arrive with no quantum hardware warning, which is why holders should bind early
+(Motivation 2).
+
 ### Why these parameters
 
 The guiding rule is the one in Motivation (3): bucket operations are rare, so
@@ -730,9 +785,8 @@ choice is the security category and the on-chain size.
 | SLH-DSA-192f | 3 | 35,664 B | 0.01 s | 0.63 ms | Designed for frequent signing; larger and slower to verify |
 | SLH-DSA-SHAKE-192s | 3 | 16,224 B | 1.14 s | 1.01 ms | Same security, 4× slower verification |
 
-* **Hash-based only.** The threat is a break of a structured assumption
-  (elliptic curves, possibly lattices). SLH-DSA relies only on the hash
-  function, so v1 admits nothing else.
+* **Hash-based only.** v1 admits no lattice or other structured scheme, for the
+  reasons in the previous subsection.
 * **Stateless SLH-DSA, not WOTS/XMSS.** Stateful keys fail when users sign from
   several devices or restore from a seed.
 * **SHA2 over SHAKE.** 4–5× faster verification. The SPHINCS+ round-3 weakness
@@ -891,7 +945,9 @@ changes listed under Revision History.
 **Draft 2 (2026-10-28)** changes Draft 1 as follows:
 
 * Motivation and Rationale: the vault framing; why buckets come before EOAs; the
-  low-frequency principle and the parameter comparison.
+  low-frequency principle and the parameter comparison; why hash-based
+  (a hedge against both quantum computers and AI-accelerated cryptanalysis of
+  structured assumptions).
 * §2: identifiers come from IIP-64 §4.1.3; FIPS 205 final conformance (SHA-512
   instantiation at category 3) is required.
 * §6: `MAX_DEADLINE_WINDOW` bounds signed-op lifetime; RESTAKE duration 0 and
