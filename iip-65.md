@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-10-19
-Revised: 2026-10-28 (Draft 2)
+Revised: 2026-10-28 (Draft 3)
 Requires: 59, 61, 64
 ```
 
@@ -22,8 +22,9 @@ years. IoTeX does not have to wait for them to build a shelter.
 This IIP lets any holder put a native staking bucket into **bunker mode** by
 locking it with a second, hash-based key (SLH-DSA, NIST FIPS 205). Once a bucket
 is locked, nothing that moves, re-owns, unstakes, or re-votes it is accepted
-unless that key has signed it. An ECDSA signature alone is no longer enough.
-Staked IOTX then stays safe even if secp256k1 is broken.
+unless that key has signed it. An ECDSA signature alone is no longer enough,
+so the bucket's principal, ownership, and votes stay protected even if the
+owner's secp256k1 key is broken, within the scope and exclusions defined below.
 
 ### The bunker in three steps
 
@@ -66,8 +67,9 @@ namespace. It introduces two new staking actions:
 
 On a guarded bucket, the existing ECDSA-authorized bucket actions fail. Any
 account may sponsor (submit and pay for) a `GuardedBucketOp`. Hash-based
-signatures rely only on the security of the hash function, so a guard is robust
-to a break of elliptic-curve or lattice assumptions.
+signatures rely on well-studied properties of hash functions and avoid the
+elliptic-curve and structured-lattice assumptions, so a guard is robust to a
+break of either.
 
 This IIP is a self-contained first deliverable of the IIP-64 migration. It needs
 no EVM precompile, no new address format, no emergency mode, no account-level
@@ -139,8 +141,8 @@ signature from the guard key. Anyone can submit that signed operation.*
    act on a bucket a few times a year, unlike EOA or contract signatures that a
    DEX user may produce many times a day. Bucket operations can therefore use a
    slow-to-sign, small-signature, hash-only scheme at a high security category.
-   The only performance bound that matters on chain is verification, which must
-   stay far below the block interval (§8).
+   The on-chain costs that matter are verification time and action size, and
+   both must stay far below the per-block budgets (§8).
 4. **Votes are consensus.** Delegates are elected by bucket votes. Someone who
    can forge an owner's ECDSA signature can redirect votes with
    `ChangeCandidate`. Guarding that operation removes a path to capturing
@@ -170,9 +172,13 @@ messages and transcripts of this IIP.
 The set accepted by this IIP is fixed by consensus and is identical on every
 node:
 
-| ID (IIP-64 §4.1.3) | Algorithm | NIST category | Public key | Signature |
-|---|---|---|---|---|
-| `0x12` | SLH-DSA-SHA2-192s | 3 | 48 bytes | 16,224 bytes |
+| ID (IIP-64 §4.1.3) | Algorithm | NIST category | Public key | Signature | Interface | Standard |
+|---|---|---|---|---|---|---|
+| `0x12` | SLH-DSA-SHA2-192s | 3 | 48 bytes | 16,224 bytes | Pure, external (`slh_sign` / `slh_verify`) | FIPS 205 final, 2024-08-13 |
+
+This table is normative for this IIP on its own. Consensus under `ParamsV1`
+does not depend on later edits of the IIP-64 registry; changing any entry
+requires a new parameter version (§8).
 
 * Any other algorithm ID MUST be rejected. Accepting another identifier from
   the IIP-64 table requires a future fork and a new parameter version (§8).
@@ -240,9 +246,9 @@ value = protobuf BucketGuard
 message BucketGuard {
   uint32 algID       = 1;  // 0x12
   bytes  publicKey   = 2;  // empty iff cleared
-  uint64 generation  = 3;  // incremented on every bind/rotate/transfer-with-new-guard
+  uint64 generation  = 3;  // incremented on every key change: bind, rotate, transfer, clear
   uint64 nonce       = 4;  // incremented on every successful GuardedBucketOp
-  uint64 boundHeight = 5;  // height of the most recent bind/rotate/transfer-with-new-guard
+  uint64 boundHeight = 5;  // height of the most recent key change, kept in a tombstone
 }
 ```
 
@@ -251,8 +257,9 @@ message BucketGuard {
 * `generation` and `nonce` MUST NOT decrease or reset during a bucket's
   lifetime, including across a clear followed by a rebind. Clearing a guard (§6,
   TRANSFER with `clearGuard`) keeps the record as a tombstone: `algID = 0`, an
-  empty `publicKey`, `boundHeight = 0`, and both counters retained. A counter
-  overflow fails the action with `ErrGuardMismatch`.
+  empty `publicKey`, both counters retained, and `boundHeight` set to the
+  clearing height. A counter overflow fails the action with
+  `ErrGuardCounterOverflow`.
 * Native bucket indices are never reused, because `totalBucketCount` is
   monotonic. Whenever a native bucket is permanently deleted, by any path
   (guarded WITHDRAW, or a legacy `WithdrawStake` or `MigrateStake` on a bucket
@@ -262,8 +269,9 @@ message BucketGuard {
 * The record MUST be written through the same state manager and snapshot as the
   bucket, so that revert and historical reads cover it. On the Erigon backend it
   MUST be registered as a storage object.
-* The record is canonically encoded (§8 rules). A decoder MUST reject a
-  non-canonical stored encoding.
+* The record is stored in canonical protobuf form: fields in ascending order,
+  each present field once, proto3 defaults omitted, minimal varints, and no
+  unknown fields. A decoder MUST reject any other stored encoding.
 
 ### 5. Action: `BindBucketGuard`
 
@@ -276,8 +284,7 @@ message BindBucketGuard {
 }
 ```
 
-Stateless validation (failure = invalid action): canonical encoding and size
-(§8); `algID = 0x12`; `len(publicKey) = 48`; `len(acceptSig) = 16,224`; intrinsic
+Stateless validation (failure = invalid action): size (§8); `algID = 0x12`; `len(publicKey) = 48`; `len(acceptSig) = 16,224`; intrinsic
 gas.
 
 Execution (deterministic failures = failed receipt, §9.3):
@@ -288,9 +295,10 @@ Execution (deterministic failures = failed receipt, §9.3):
 3. The caller (outer ECDSA sender) MUST be the owner (`ErrUnauthorizedOperator`).
 4. §3 (b) and (c) must hold structurally (`ErrGuardScope`).
 5. The guard record must be absent or a tombstone (`ErrGuardScope`).
-6. `generation + 1` must not overflow (`ErrGuardMismatch`).
+6. `generation + 1` must not overflow (`ErrGuardCounterOverflow`).
 7. Verify `acceptSig` over `ACCEPT(newGeneration = generation+1, resultingOwner =
-   owner, deadline = 0)` (`ErrGuardSignature`). This is the proof of possession.
+   owner, callHash = 0^32)` (`ErrGuardSignature`). This is the proof of
+   possession. No staking or guard state is written before this step succeeds.
 8. Write `{algID, publicKey, generation+1, nonce (unchanged), boundHeight =
    blockHeight}`, emit the bind log, and settle.
 
@@ -318,6 +326,7 @@ message GuardedBucketOp {
   NewGuard newGuard           = 12;  // TRANSFER (or clearGuard), ROTATE
   bool   clearGuard           = 13;  // TRANSFER only
   bytes  sig                  = 14;  // current guard key over CALL (§7)
+  bytes  sponsor              = 15;  // optional: empty, or the only 20-byte address that may submit
 }
 message NewGuard { uint32 algID = 1; bytes publicKey = 2; bytes acceptSig = 3; }
 ```
@@ -326,10 +335,10 @@ message NewGuard { uint32 algID = 1; bytes publicKey = 2; bytes acceptSig = 3; }
 |---|---|---|
 | 1 | UNSTAKE | As `Unstake`, including the auto-stake, maturity, and endorsement preconditions |
 | 2 | WITHDRAW | As `WithdrawStake`, but credits `recipient` rather than the caller. Deletes the bucket and the guard |
-| 3 | TRANSFER | As `TransferStake` to `newOwner`. Exactly one of `newGuard` / `clearGuard` MUST be set |
+| 3 | TRANSFER | As `TransferStake` to `newOwner`. Exactly one of `newGuard` / `clearGuard` MUST be set. `newOwner` MUST differ from the current owner (use ROTATE instead) |
 | 4 | CHANGE_CANDIDATE | As `ChangeCandidate`. `candidateName` MUST resolve, at execution time, to `expectedCandidateID` |
 | 5 | RESTAKE | As `Restake` with `duration` and `autoStake`, including the existing duration validation (duration 0 is accepted, as for `Restake`) |
-| 6 | ROTATE | Replace the key with `newGuard`. `generation += 1`. Rotating to the same key is permitted and only advances the counters |
+| 6 | ROTATE | Replace the key with `newGuard`. `generation += 1`. Rotating to the same key is permitted; it advances the counters and thereby invalidates every outstanding signed op |
 
 Unknown `op` values MUST be rejected. There is no generic inner-action wrapper.
 
@@ -341,19 +350,40 @@ MUST receive the guard authorization explicitly, scoped to
 that bypasses ownership checks, and every handler MUST act on
 `GuardedBucketOp.bucketIndex` only.
 
-**Deadline.** A signed `GuardedBucketOp` is a bearer authorization: anyone who
-obtains it can submit it, and it stays valid until its `deadline` height unless
-another guarded op advances the nonce first. To bound that exposure, `deadline`
-MUST NOT exceed the execution height plus `MAX_DEADLINE_WINDOW` (§8). Wallets
-SHOULD use a much shorter window by default (for example, one day).
+**Sponsor binding.** If `sponsor` is non-empty, the outer ECDSA sender MUST equal
+it (`ErrUnauthorizedOperator`). An empty `sponsor` makes the op a **bearer
+authorization**: anyone who obtains it can submit it. Bearer mode lets an
+adversary copy a broadcast op and execute it first, so that the original
+sponsor's transaction fails and is charged gas (Security Considerations).
+Wallets SHOULD bind the sponsor whenever it is known at signing time, and MAY
+use bearer mode when it is not (for example, emergency recovery through an
+unknown relayer).
 
-**Recipient.** `recipient` MUST be a 20-byte account address. The account is
-created if absent, and contract addresses are allowed. Withdrawn IOTX leaves the
-guard's protection; wallets SHOULD default to a fresh, never-spent address.
+**Deadline.** A signed op stays valid until its `deadline` height unless another
+guarded op advances the nonce first. To bound that exposure, `deadline` MUST NOT
+exceed the execution height plus `MAX_DEADLINE_WINDOW` (§8). Wallets SHOULD use
+a much shorter window by default (for example, one day).
+
+**Addresses.** Under `ParamsV1`, `recipient`, `newOwner`, and a non-empty
+`sponsor` are 20-byte account addresses, and the zero address is rejected in
+stateless validation. The transcript encodes them length-prefixed (§7), so a
+later parameter version can admit post-quantum address types without a new
+layout. In addition:
+
+* `recipient` (WITHDRAW): the account is created if absent, and contract
+  addresses are allowed. Withdrawn IOTX leaves the guard's protection; see
+  Security Considerations for destination guidance.
+* `newOwner` (TRANSFER): a contract cannot call the native staking protocol, so
+  a contract-owned bucket can be managed only through its guard. A TRANSFER with
+  `clearGuard` MUST therefore fail (`ErrGuardScope`) if `newOwner` has contract
+  code at execution time or is the address of a native protocol (staking,
+  rewarding, poll, and so on). A TRANSFER with `newGuard` to such an address is
+  permitted.
 
 **What the guard authorizes.** TRANSFER and WITHDRAW act on the bucket's
 execution-time amount, including any deposits and IIP-59 compounding that
-arrived after signing.
+arrived after signing. On a guarded bucket the amount can only grow without a
+guard signature, so the signed effect is "the whole bucket".
 
 **Web3 entry.** Both actions MAY also be submitted as Ethereum-format
 transactions to the native staking address, one ABI method per action and op.
@@ -374,49 +404,74 @@ own context, following the IIP-64 naming convention (`IoTeX-PQ-<Purpose>-v1`):
 FIPS 205 prepends `0x00 || uint8(len(ctx)) || ctx` to the signed message, so the
 contexts are length-delimited and no context can be a prefix of another. The
 transcripts below carry no further domain tag. Any change to a transcript layout
-MUST change the `-vN` suffix of its context.
+MUST change the `-vN` suffix of its context. (Layouts in Draft revisions of this
+IIP were never deployed; `-v1` denotes the layout at activation.)
 
-All integers are big-endian with the stated widths. `chainID` is the native
-chain ID `protocol.MustGetBlockchainCtx(ctx).ChainID` (uint32: mainnet 1,
-testnet 2), **not** the EVM network ID (4689 / 4690). Booleans are a single
-byte, `0x00` or `0x01`. Addresses are their 20 raw bytes. `bytes(x)` is
-`uint32_be(len(x)) || x`. Messages are signed directly with pure SLH-DSA, with
-no intermediate digest.
+All integers are big-endian with the stated widths. Booleans are a single byte,
+`0x00` or `0x01`. Addresses are their raw bytes. `bytes(x)` is
+`uint32_be(len(x)) || x`. `candidateName` is signed as its exact UTF-8 byte
+sequence, with no Unicode normalization; a `candidateName` that is not valid
+UTF-8 makes the action invalid (§9.1). Messages are signed directly with pure
+SLH-DSA, with no intermediate digest.
+
+**Chain-instance domain.** Every transcript begins with a 32-byte domain that
+identifies one chain instance, not just a chain ID:
 
 ```
-CALL   = uint32 chainID || uint64 bucketIndex || owner(20)
+qsbDomain = SHA-256("IoTeX-PQ-Bucket-Domain-v1" || uint32_be(chainID) || genesisHash(32))
+```
+
+`chainID` is the native chain ID `protocol.MustGetBlockchainCtx(ctx).ChainID`
+(mainnet 1, testnet 2), **not** the EVM network ID (4689 / 4690), and
+`genesisHash` is the hash of the network's genesis block. `qsbDomain` is a
+constant per network; wallets obtain it from the node or from the published
+vectors. Implementations MUST NOT derive the replay domain from the numeric
+chain ID alone. A network started from a copy of IoTeX state with a new genesis,
+or a private network reusing chain ID 1 or 2, therefore has a different domain.
+A chain that forks away from IoTeX after `QSBHeight` shares both values and
+MUST change its native chain ID, as with EIP-155 on Ethereum.
+
+```
+CALL   = qsbDomain(32) || uint64 bucketIndex || owner(20)
        || uint64 generation || uint64 nonce || uint64 deadline || uint32 op
        || bytes(recipient) || bytes(newOwner)
        || bytes(candidateName) || bytes(expectedCandidateID)
        || uint32 duration || uint8 autoStake
        || uint8 hasNewGuard || [uint32 algID || bytes(publicKey)]   // if hasNewGuard
-       || uint8 clearGuard
+       || uint8 clearGuard || bytes(sponsor)
 
-ACCEPT = uint32 chainID || uint64 bucketIndex
+ACCEPT = qsbDomain(32) || uint64 bucketIndex
        || uint64 newGeneration || resultingOwner(20)
-       || uint32 algID || bytes(publicKey) || uint64 deadline
+       || uint32 algID || bytes(publicKey) || callHash(32)
 ```
 
 * CALL is signed by the current guard key. `owner` is the bucket owner at
   execution time.
 * ACCEPT is signed by the incoming key:
-  * BIND: `newGeneration = generation+1`, `resultingOwner = owner`, `deadline = 0`.
-  * ROTATE: `newGeneration = generation+1`, `resultingOwner = owner`, and the
-    `deadline` of the CALL.
+  * BIND: `newGeneration = generation+1`, `resultingOwner = owner`, and
+    `callHash` = 32 zero bytes. A bind has no content beyond the fields ACCEPT
+    already carries.
+  * ROTATE: `newGeneration = generation+1`, `resultingOwner = owner`, and
+    `callHash = SHA-256(CALL)`.
   * TRANSFER with `newGuard`: `newGeneration = generation+1`,
-    `resultingOwner = newOwner`, and the `deadline` of the CALL.
+    `resultingOwner = newOwner`, and `callHash = SHA-256(CALL)`.
+* `SHA-256(CALL)` is taken over the CALL transcript bytes above (which contain
+  no signature), so there is no circular dependency: the incoming key sees the
+  complete operation before it accepts.
 * A guarded operation that installs a new key therefore carries two signatures.
-* ACCEPT is the incoming key's acceptance of the resulting binding: bucket, next
-  generation, resulting owner, key, and deadline. It is **not** approval of one
-  particular CALL. The operation itself is authorized only by the current guard's
-  CALL signature, and that signature commits to the incoming key.
+* ACCEPT is the incoming key's consent to **this exact operation**. An ACCEPT
+  produced for one CALL cannot be combined with any other CALL. The operation
+  itself is authorized by the current guard's CALL signature, which commits to
+  the incoming key.
 
 What each bound field rules out (non-normative):
 
 | Field | Prevents |
 |---|---|
 | context (`-Call-` / `-Accept-`) | Using a CALL signature as an ACCEPT, or either as a signature from another IIP-64 domain |
-| `chainID` | Replay between mainnet, testnet, and other IoTeX chains |
+| `qsbDomain` | Replay between mainnet, testnet, private networks, and networks started from copied state |
+| `sponsor` | Front-running by another submitter when the sponsor is bound |
+| `callHash` | Reusing one ACCEPT with a different CALL |
 | `bucketIndex` | Replay on another bucket guarded by the same key |
 | `owner` / `resultingOwner` | Execution after the owner changed in a way the signer did not approve |
 | `generation` | Replay after a rotation, a transfer with a new guard, or a clear and rebind |
@@ -443,20 +498,33 @@ always replay under the parameters they were produced with.
 | `G_BYTE` | 100 per byte | Equal to the existing staking payload price |
 | `G_VERIFY` | 30,000 per verification | Pending linux/amd64 calibration |
 | `MAX_DEADLINE_WINDOW` | 120,960 blocks | About 7 days at 5-second blocks |
+| `MAX_QSB_VERIFICATIONS_PER_BLOCK` | 32 | Block validity rule, independent of the block gas limit |
 
-* **Canonical encoding (consensus object).** Validity and pricing are defined
-  over the **decoded** `BindBucketGuard` / `GuardedBucketOp` value, not over
-  received bytes (decoders upstream of staking, such as API, gossip, and block
-  deserialization, see only decoded messages). `size` is the length of the
-  canonical encoding `C(m)` of the decoded message `m`, where `C` is defined
-  recursively: fields emitted in ascending field-number order; each present
-  field emitted exactly once; scalar and `bytes`/`string` fields with the proto3
-  default value omitted; varints in minimal (shortest) form; length prefixes
-  minimal; a nested message (`newGuard`) emitted iff set, as `C(newGuard)`; no
-  unknown fields. Implementations MUST compute `size` with an encoder conforming
-  to this definition (not by measuring received bytes). Ingress nodes SHOULD
-  additionally reject non-canonical wire encodings, but this is relay policy, not
-  consensus.
+* **Size (`QSBSizeV1`).** Validity and pricing are defined over the **decoded**
+  `BindBucketGuard` / `GuardedBucketOp` value, not over received bytes (decoders
+  upstream of staking, such as API, gossip, and block deserialization, see only
+  decoded messages). `size` is computed from the semantic fields by the formula
+  below, not by a protobuf serializer, so it does not depend on any protobuf
+  runtime:
+
+  ```
+  size(m)  = Σ over present fields f of m:  1 + payload(f)    // every field number is ≤ 15: a 1-byte tag
+  payload(f) = vlen(v)                     for uint32 / uint64 fields, value v
+             = 1                           for bool fields (only true is present)
+             = vlen(n) + n                 for bytes / string fields of length n
+             = vlen(size(g)) + size(g)     for newGuard, g = the nested message
+  vlen(x)  = number of bytes in the minimal unsigned LEB128 varint of x (1 for x < 128)
+  ```
+
+  A scalar, `bytes`, or `string` field is present iff its value differs from the
+  proto3 default (0, false, empty). `newGuard` is present iff it is set,
+  including when every field inside it is empty; such a value then fails the
+  per-op field rules. Unknown fields are not part of the decoded value and are
+  ignored. `string` fields MUST be valid UTF-8 (otherwise the action is
+  invalid). Lengths are checked against the limits before summing, so the sum
+  cannot overflow. Ingress nodes SHOULD additionally reject non-canonical wire
+  encodings, but this is relay policy, not consensus. Cross-language `size`
+  vectors MUST cover each field and the empty-`newGuard` case.
 * **Limits** are checked in stateless validation.
 * **Intrinsic gas:** `G_BASE + G_BYTE·size + k·G_VERIFY`, where `k` is the number
   of SLH-DSA verifications the action requires (1, or 2 with `newGuard`). A bind
@@ -472,23 +540,37 @@ always replay under the parameters they were produced with.
   (CIRCL v1.6.5, Go 1.26.5, Apple M3 Pro, darwin/arm64). At the ~60 Mgas/s
   execution budget assumed by current Ethereum repricing work (≈16.7 ns/gas)
   this is ≈14,000 gas; `G_VERIFY` adds a 2× margin. The benchmark source,
-  dependency versions, and raw results are in `assets/iip-qsb/bench/`.
-  linux/amd64 measurements of the full action, not just the primitive, MUST be
-  added before this IIP leaves Draft. Any change MUST be made by amending this
-  IIP and its vectors. Validators MUST run native binaries; an emulated build
-  (for example, Rosetta 2) measured about 8× slower.
-* **Block-level bound.** At a 25 M block gas limit, a block can hold at most
-  about 15 guarded actions of 16 KB, which is about 3.5 ms of verification and
-  under 0.5 MB of action data. Both are far below the block interval and the
-  default p2p `MaxMessageSize` (12 MB).
+  dependency versions, and raw results are in `assets/iip-qsb/bench/`. This is
+  a single-platform primitive measurement, and `G_VERIFY` is **provisional**.
+  Before this IIP leaves Draft, the full handler (decoding, state reads,
+  verification, state writes, snapshot and revert) MUST be benchmarked on
+  linux/amd64 (with and without SHA extensions) and on linux/arm64, on the
+  lowest supported validator class, with valid and invalid signatures, one and
+  two verifications, maximum-size payloads, cold and warm caches, and a full
+  block of guarded actions. `G_VERIFY` MUST then be set from the slowest
+  supported configuration with a safety margin. Any change MUST be made by
+  amending this IIP and its vectors. Validators MUST run native binaries; an
+  emulated build (for example, Rosetta 2) measured about 8× slower.
+* **Block-level bound.** A block is invalid if its `BindBucketGuard` and
+  `GuardedBucketOp` actions together require more than
+  `MAX_QSB_VERIFICATIONS_PER_BLOCK` verifications, counting `k` for every
+  included action whether it succeeds or fails. This bounds verification work
+  and QSB data per block (at most 32 × 17,000 bytes, about 0.54 MB) without
+  depending on future block-gas-limit governance. At the current 25 M block gas
+  limit, gas is the tighter bound: about 15 guarded actions of 16 KB, about
+  3.5 ms of verification. Both bounds are far below the block interval and the
+  default p2p `MaxMessageSize` (12 MB). Verification is the main cryptographic
+  cost, not the only one; propagation, mempool memory, and state growth are
+  bounded by the same size limits and by `G_BYTE`.
 
 ### 9. `GuardedBucketOp` validation, execution, and failure semantics
 
 #### 9.1 Stateless validation (failure = invalid action, not includable)
 
-Canonical encoding and size (§8); known `op`; per-op field rules (required
-fields present, all others at default); fixed lengths (20-byte addresses,
-48-byte keys, 16,224-byte signatures, `newGuard.algID = 0x12`); `deadline > 0`;
+Size (§8); valid UTF-8 in `candidateName`; known `op`; per-op field rules
+(required fields present, all others at default); fixed lengths (20-byte
+addresses, 48-byte keys, 16,224-byte signatures, `newGuard.algID = 0x12`); no
+zero address in `recipient`, `newOwner`, or `sponsor`; `deadline > 0`;
 existing staking sanity checks for the op (e.g. restake duration bound,
 candidate-name format); intrinsic gas.
 
@@ -497,17 +579,19 @@ candidate-name format); intrinsic gas.
 1. Snapshot the state manager before any guard or staking write.
 2. Load the bucket (`ErrInvalidBucketIndex` if absent) and require it native and
    guarded (`ErrBucketNotGuarded`).
-3. Require `generation`, `nonce` equal to stored; `blockHeight ≤ deadline ≤
-   blockHeight + MAX_DEADLINE_WINDOW`; no counter overflow
-   (`ErrGuardMismatch`).
-4. Op-specific state preconditions, with the existing handlers' receipt statuses
+3. If `sponsor` is non-empty, require the outer sender to equal it
+   (`ErrUnauthorizedOperator`).
+4. Require `generation`, `nonce` equal to stored and `blockHeight ≤ deadline ≤
+   blockHeight + MAX_DEADLINE_WINDOW` (`ErrGuardMismatch`); require that the
+   counters will not overflow (`ErrGuardCounterOverflow`).
+5. Op-specific state preconditions, with the existing handlers' receipt statuses
    (maturity, auto-stake, unstaked, etc.); for CHANGE_CANDIDATE the resolved
    candidate's identifier MUST equal `expectedCandidateID`
-   (`ErrCandidateMismatch`).
-5. Verify CALL, then ACCEPT if present (`ErrGuardSignature`).
-6. Apply the transition (§9.4) through the existing staking state-manager helpers
-   (bucket, owner/candidate indexes, bucket pool, IIP-59 copy-on-write hooks).
-7. Emit success logs; settle.
+   (`ErrCandidateMismatch`); for TRANSFER the `newOwner` rules of §6
+   (`ErrGuardScope`).
+6. Verify CALL, then ACCEPT if present (`ErrGuardSignature`).
+7. Apply the transition (§9.4) through the guarded mutation layer of §10.
+8. Emit success logs; settle.
 
 ```mermaid
 sequenceDiagram
@@ -519,16 +603,17 @@ sequenceDiagram
     Note over Owner: Sign CALL with the guard key<br/>ctx IoTeX-PQ-Bucket-Call-v1
     Owner-->>Sponsor: Signed GuardedBucketOp (QR code or file)
     Sponsor->>Node: Submit in an ECDSA-signed envelope, pay gas
-    Note over Node: Stateless checks (9.1)<br/>size, algID, fields, deadline > 0
+    Note over Node: Stateless checks (9.1)<br/>size, UTF-8, algID, fields, addresses, deadline > 0
     Node->>Node: 1. Snapshot the state manager
     Node->>Node: 2. Bucket exists, is native and guarded
-    Node->>Node: 3. generation, nonce, deadline window
-    Node->>Node: 4. Op preconditions of the existing handler
-    Node->>Node: 5. Verify CALL, and ACCEPT if a key is installed
+    Node->>Node: 3. Sponsor binding, if set
+    Node->>Node: 4. generation, nonce, deadline window
+    Node->>Node: 5. Op preconditions of the existing handler
+    Node->>Node: 6. Verify CALL, and ACCEPT if a key is installed
     alt Any step fails
         Node-->>Sponsor: Revert to the snapshot, failed receipt, gas charged
     else All steps pass
-        Node->>Node: 6. Apply the effect and the 9.4 guard transition
+        Node->>Node: 7. Apply the effect and the 9.4 guard transition
         Node-->>Sponsor: Success receipt and one BucketGuard event
     end
 ```
@@ -537,9 +622,12 @@ sequenceDiagram
 in this order, and the order decides the receipt status.*
 
 The step order fixes which receipt status is reported when several checks fail.
-An implementation MAY evaluate step 4 and apply step 6 before step 5, provided
-that a failure at step 5 restores the state manager and every protocol view to
-the step-1 snapshot (see §Test Cases for the required invariant test).
+Implementations MUST verify every required guard signature (step 6) before any
+persistent or in-memory staking or guard state is mutated. Speculative mutation
+followed by rollback is not permitted under `ParamsV1`. Legacy handler logic
+reused by step 7 MUST be split into a validation phase (run in step 5) and an
+application phase (run in step 7) where it is not already. The step-1 snapshot
+remains for failures after step 6, such as a settlement failure.
 
 #### 9.3 Failure classification
 
@@ -574,7 +662,7 @@ stateDiagram-v2
     Unguarded --> Guarded: BIND, generation + 1
     Guarded --> Guarded: UNSTAKE, CHANGE_CANDIDATE, RESTAKE, nonce + 1
     Guarded --> Guarded: ROTATE or TRANSFER with newGuard, new key, generation + 1, nonce + 1
-    Guarded --> Tombstone: TRANSFER with clearGuard, nonce + 1
+    Guarded --> Tombstone: TRANSFER with clearGuard, generation + 1, nonce + 1
     Tombstone --> Guarded: BIND, generation + 1
     Guarded --> Deleted: WITHDRAW to the signed recipient
     Tombstone --> Deleted: legacy WithdrawStake or MigrateStake
@@ -591,21 +679,22 @@ guard signature leads out of the Guarded state.*
 | UNSTAKE / CHANGE_CANDIDATE / RESTAKE | existing handler effect | `nonce+1`; other fields unchanged |
 | WITHDRAW | bucket deleted, amount credited to `recipient` | **deleted** (log reports consumed `nonce` and resulting `nonce+1`) |
 | TRANSFER + `newGuard` | owner := `newOwner` | key := new; `generation+1`; `nonce+1`; `boundHeight` := height |
-| TRANSFER + `clearGuard` | owner := `newOwner` | tombstone (`algID 0`, empty key, `boundHeight 0`); `generation`, `nonce+1` retained |
+| TRANSFER + `clearGuard` | owner := `newOwner` | tombstone (`algID 0`, empty key); `generation+1`; `nonce+1`; `boundHeight` := height |
 | ROTATE | none | key := new; `generation+1`; `nonce+1`; `boundHeight` := height |
 
 #### 9.5 Receipt statuses
 
 New `ReceiptStatus` values (proposed numbers, final assignment in `iotex-proto`):
 `ErrBucketGuarded = 216`, `ErrBucketNotGuarded = 217`, `ErrGuardMismatch = 218`,
-`ErrGuardSignature = 219`, `ErrGuardScope = 220`, `ErrCandidateMismatch = 221`.
+`ErrGuardSignature = 219`, `ErrGuardScope = 220`, `ErrCandidateMismatch = 221`,
+`ErrGuardCounterOverflow = 222`.
 Existing `ErrInvalidBucketIndex (202)` and `ErrUnauthorizedOperator (203)` are
 reused as stated. Proposed `ActionCore` oneof fields: `bindBucketGuard = 59`,
 `guardedBucketOp = 60`.
 
 #### 9.6 Mempool policy (non-consensus)
 
-Nodes SHOULD run §9.2 steps 2–5 against their current state when admitting a
+Nodes SHOULD run §9.2 steps 2–6 against their current state when admitting a
 `GuardedBucketOp` or `BindBucketGuard`, and SHOULD neither keep nor relay one
 that fails. This keeps invalid-signature actions, which are 16–34 KB each, out
 of gossip and out of honest proposers' blocks. It is relay policy only: every
@@ -634,26 +723,44 @@ Considerations for the residual exposure.
 
 Receipt status numbers are listed in §9.5.
 
+**Enforcement point.** Guard enforcement MUST sit in one shared bucket-mutation
+layer that every native staking path goes through, not only in individual
+handlers. Every write that changes a bucket's owner, candidate, amount
+(decrease), unstake state, duration, `autoStake`, existence, self-stake
+reference, or endorsement record carries an explicit authorization: legacy owner
+authorization (rejected with `ErrBucketGuarded` on a guarded bucket), guard
+authorization for a specific `(bucketIndex, generation, nonce, op)`, or a
+fork-gated protocol migration. Handler-level checks alone do not satisfy this
+requirement. Deposits and IIP-59 compounding, which only increase the amount,
+remain permitted under legacy authorization.
+
+Every future IIP that adds or changes a native-bucket mutation MUST classify it
+as guard-neutral, guard-authorized, or forbidden on guarded buckets.
+
 ### 11. Events and API
 
 Each successful `BindBucketGuard` or `GuardedBucketOp` emits **exactly one**
 event log. The emitter is the staking protocol address, and the log is produced
 by a single `AddEvent(topics, data)` call.
 
+The log is a standard Solidity ABI event, decodable by Ethereum tooling:
+
+```solidity
+event BucketGuard(uint64 indexed bucketIndex, uint64 indexed op,
+                  uint64 generation, uint64 nonce, address sponsor, address counterparty);
+```
+
 * `topic[0]` =
   `0x73a1cc2c5c34de8d095f5003eb096fa77f44357dd83dcea0225ca286942426ec`, which is
-  Keccak-256 of the ASCII string
-  `BucketGuard(uint64,uint64,uint64,uint64,address,address)`. The string serves
-  only to derive the constant; the data below is not ABI-encoded.
-* `topic[1]` = `bucketIndex`, and `topic[2]` = `op`. Each is a big-endian
-  integer left-padded with zeros to 32 bytes. `op = 0` denotes BIND, and 1–6 the
-  ops in §6.
-* `data` = `uint64_be(generation) || uint64_be(nonce) || sponsor(20) ||
-  counterparty(20)`, which is 56 bytes:
+  Keccak-256 of `BucketGuard(uint64,uint64,uint64,uint64,address,address)`.
+* `topic[1]` = `bucketIndex`, and `topic[2]` = `op`, each ABI-encoded (left-padded
+  to 32 bytes). `op = 0` denotes BIND, and 1–6 the ops in §6.
+* `data` = `abi.encode(generation, nonce, sponsor, counterparty)`, which is
+  128 bytes:
   * The counters are the resulting values. For WITHDRAW the record is deleted and
     `nonce` is the consumed value plus 1.
-  * `counterparty` is `newOwner` for TRANSFER, `recipient` for WITHDRAW, and 20
-    zero bytes otherwise.
+  * `counterparty` is `newOwner` for TRANSFER, `recipient` for WITHDRAW, and the
+    zero address otherwise.
 
 The legacy per-handler logs (`unstake`, `withdrawStake`, …) are **not** emitted
 for guarded ops. Transaction logs are emitted as today: gas-fee logs always
@@ -667,6 +774,12 @@ The guard of a bucket is queryable at any height through
 `publicKey`, `generation`, `nonce`, and `boundHeight`; an empty `publicKey`
 means unguarded.
 
+For wallet recovery (§12.4), nodes SHOULD also serve an index, outside
+consensus, from `guardKeyID = SHA-256(uint32_be(algID) || publicKey)` to the
+indices of the live buckets whose current guard has that key (`ReadStakingData`
+method `BUCKETS_BY_GUARD_KEY`). Clients MUST check every result against the
+guard record at the queried height.
+
 ### 12. Wallet profile `QSB-KDF-v1`
 
 This section is a **wallet interoperability requirement**, not a consensus rule:
@@ -676,21 +789,24 @@ consensus verifies possession (ACCEPT), and cannot verify derivation.
 
 ```
 prk = HKDF-Extract(salt = "IoTeX-PQ-Bucket-KDF-v1", IKM = bip39_seed)     // HMAC-SHA-512
-okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
+okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(vaultIndex)
                              || uint32_be(keyIndex), L = 72)
 (SK.seed, SK.prf, PK.seed) = okm[0:24], okm[24:48], okm[48:72]
 (sk, pk) = slh_keygen_internal(SK.seed, SK.prf, PK.seed)                  // FIPS 205 Alg. 18
 ```
 
 * `bip39_seed` is the 64-byte BIP-39 seed (PBKDF2 output), not any BIP-32 node.
-* `account` is the BIP-44 account index of the address that will own the bucket
-  after the key is installed (the binder for BIND/ROTATE; the **new owner** for
-  TRANSFER with `newGuard`, whose wallet produces `newGuard` and its ACCEPT).
-  With a dedicated vault mnemonic (§12.2), `account` is 0.
-* `keyIndex` is allocated per `(seed, account)`, starting at 0, and incremented
-  each time a new guard key is derived for that account (bind, rotate, or
-  receiving a transfer). A wallet MAY reuse one key across several buckets, as
-  transcripts are bucket-scoped. `keyIndex` ranges over `0 … 1023`.
+  The mnemonic and the optional passphrase are NFKD-normalized as BIP-39
+  specifies; the passphrase is part of the seed, and KDF vectors MUST cover the
+  cases with and without one.
+* `vaultIndex` is independent of BIP-44 account numbering, so recovery does not
+  depend on which ECDSA account owns a bucket. It is 0 by default; a wallet MAY
+  use further vault indices to keep separate groups of buckets apart.
+* `keyIndex` is allocated per `(seed, vaultIndex)`, starting at 0, and
+  incremented each time a new guard key is derived (bind, rotate, or receiving a
+  transfer; for a TRANSFER with `newGuard`, the **new owner's** wallet derives
+  the key and signs ACCEPT). A wallet MAY reuse one key across several buckets,
+  as transcripts are bucket-scoped. There is no upper bound on `keyIndex`.
 * Because SLH-DSA is stateless, reusing a key index (across buckets or after a
   lost high-water mark) is **safe**; index allocation is a convenience, not a
   security requirement.
@@ -703,9 +819,13 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
   account (imported private key, keystore) MUST NOT derive a guard key from its
   private key; it MUST use a dedicated vault mnemonic or a randomly generated
   guard key with an explicit backup.
-* The mnemonic SHOULD have 24 words (256 bits of entropy). The guard key is no
-  stronger than its seed, and a 12-word mnemonic (128 bits) caps it below the
-  category-3 target of §2.
+* The mnemonic SHOULD have 24 words (256 bits of entropy) from a
+  cryptographically secure generator. The guard key is no stronger than its
+  seed, and a 12-word mnemonic (128 bits) caps it below the category-3 target of
+  §2.
+* After creating a guard seed, wallets SHOULD have the user verify the backup
+  by re-deriving the key from it and comparing the public key before the first
+  bind.
 * Wallets SHOULD offer a **dedicated vault mnemonic**, separate from the
   mnemonic of everyday accounts. This keeps the guard a true second factor
   against malware and phishing that steal an everyday seed, and lets
@@ -717,8 +837,15 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
   not the deterministic variant. Deterministic signing is used only to produce
   test vectors.
 * Wallets MUST verify every signature they produce before releasing it. This
-  defends against fault attacks on hash-based signatures, in which one faulty
-  signature can leak material that enables forgery.
+  defends against transient fault attacks on hash-based signatures, in which
+  one faulty signature can leak material that enables forgery. It does not
+  defend against a compromised signing device, which can alter both signing and
+  verification.
+* Wallets SHOULD rebuild the transcript from the fields shown to the user,
+  rather than signing bytes supplied by another component, and SHOULD check that
+  the derived public key equals the on-chain guard before signing. Where
+  feasible, the signature SHOULD also be checked by an independent verifier (for
+  example, the submitting device).
 * Signing and submission are separate. Wallets SHOULD support signing on an
   offline device and transferring the signed operation (for example by QR code
   or file) to any online account for submission.
@@ -726,12 +853,23 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(account)
 #### 12.4 Recovery
 
 Recovery requires no extra backup, because guard public keys are on chain. A
-restoring wallet derives `pk` for **every** `keyIndex` in `0 … 1023` for each of
-its accounts (exhaustive, no gap limit; ≈ 26 s per account on an Apple M3 Pro,
-≈ 30 s on an Apple M2 Pro, several minutes on emulated or slow devices;
-resumable) and matches against the on-chain `publicKey` of each guarded bucket it
-owns. It then continues allocating from the highest matched index + 1 (or any
-index; reuse is safe).
+restoring wallet, for each vault index it uses (default 0):
+
+1. derives `pk` for `keyIndex` in a scan window, by default `0 … 1023`
+   (exhaustive, no gap limit; ≈ 26 s on an Apple M3 Pro, ≈ 30 s on an Apple M2
+   Pro, several minutes on emulated or slow devices; resumable). The window is a
+   default, not a limit: users MAY extend it or supply their own range;
+2. computes `guardKeyID` for each key and queries `BUCKETS_BY_GUARD_KEY` (§11).
+   This finds every bucket guarded by the key, including buckets transferred to
+   an owner address the wallet has not yet restored, and buckets that share one
+   key;
+3. checks each result against the guard record on chain;
+4. continues allocating from the highest matched index + 1 (or any index; reuse
+   is safe).
+
+Without the index, a wallet can instead read the guard record of every bucket
+owned by its restored addresses. Wallets MAY keep non-consensus metadata (vault
+and key indices per bucket) to speed this up.
 
 ## Rationale
 
@@ -778,10 +916,13 @@ choice.
    Ethereum's own post-quantum roadmap has moved toward hash-based signatures
    for the same reason.
 
-SLH-DSA is the scheme that hedges both threats. Its security reduces only to
-standard properties of the hash function (preimage and second-preimage
-resistance, and pseudorandomness), and it has no algebraic structure to attack.
-The best known attacks are generic: Grover's algorithm gives at most a quadratic
+SLH-DSA is the scheme that hedges both threats. Its security rests primarily on
+well-studied properties of the hash function (preimage and second-preimage
+resistance, and pseudorandomness), and it avoids the discrete-log and
+structured-lattice assumptions used by the other families. It is not free of
+design complexity (FORS, WOTS+, the hypertree, and address-based domain
+separation must all be implemented correctly), but none of it depends on a hard
+algebraic problem. The best known attacks are generic: Grover's algorithm gives at most a quadratic
 speedup, which the NIST security categories already account for. A practical
 break of SHA-2 at this level would also break most of the internet's existing
 security infrastructure, so it is the most conservative assumption available.
@@ -791,7 +932,7 @@ security infrastructure, so it is the most conservative assumption available.
 | ECDSA secp256k1 (today) | Elliptic-curve discrete log | **Broken** | Exposed | 64–65 B |
 | ML-DSA-65 (FIPS 204), cat. 3 | Module-LWE / SIS lattices | Resists | Exposed | 3,309 B |
 | FN-DSA / Falcon (FIPS 206) | NTRU lattices | Resists | Exposed | 666 B (cat. 1), 1,280 B (cat. 5) |
-| **SLH-DSA-SHA2-192s (FIPS 205), cat. 3** | **Hash function only** | **Resists** | **No structure to attack** | **16,224 B** |
+| **SLH-DSA-SHA2-192s (FIPS 205), cat. 3** | **Hash function properties** | **Resists** | **No algebraic assumption** | **16,224 B** |
 
 The price is size: an SLH-DSA-192s signature is about five times an ML-DSA-65
 signature. Bucket operations happen a few times a year, so this IIP pays that
@@ -865,7 +1006,20 @@ The following must be covered before activation:
 * Behavior at the fork boundary (`QSBHeight − 1` vs `QSBHeight`).
 * Each op's success and precondition failures.
 * Every rejected path in §10, including consignment and migration.
-* Wrong bucket, operation, chain, owner, or candidate ID.
+* Wrong bucket, operation, owner, or candidate ID.
+* Chain-instance replay: an op signed for one `qsbDomain` rejected on a network
+  with the same chain ID but a different genesis hash, and vice versa.
+* Sponsor binding: a sponsor-bound op submitted by another sender fails with
+  `ErrUnauthorizedOperator`; a bearer op succeeds from any sender.
+* An ACCEPT produced for one CALL rejected with a different CALL that has the
+  same bucket, generation, owner, and key.
+* Address rules: zero `recipient` / `newOwner` / `sponsor`; TRANSFER to the
+  current owner; `clearGuard` to a contract address and to each native protocol
+  address; `newGuard` to a contract address (permitted).
+* `candidateName` with invalid UTF-8 (invalid action).
+* Counter overflow (`ErrGuardCounterOverflow`).
+* A block exceeding `MAX_QSB_VERIFICATIONS_PER_BLOCK`, counting failed actions
+  and two-signature ops.
 * Expired deadline, and a deadline beyond `MAX_DEADLINE_WINDOW`.
 * A signature made with the wrong context (CALL signed under the ACCEPT context
   and vice versa).
@@ -877,6 +1031,12 @@ The following must be covered before activation:
 * **Rollback invariant:** for every op, a CALL or ACCEPT signature failure leaves
   the state root and every protocol view byte-identical to their state before
   the action, apart from the sponsor's gas and nonce.
+* **Verify-before-mutate:** instrumentation shows no staking or guard write
+  before signature verification completes, for every op.
+* **Enforcement-layer coverage:** every native staking path that mutates a
+  bucket (including consignment, migration, candidate activation, endorsement,
+  and exit processing) is exercised against a guarded bucket and is rejected
+  by the shared mutation layer of §10, not only by its handler.
 * **Scope invariant:** no sequence of actions makes a guarded bucket a self-stake
   bucket or gives it an endorsement record (every writer of
   `SelfStakeBucketIdx` and of endorsement records is exercised).
@@ -884,7 +1044,10 @@ The following must be covered before activation:
 * Both storage backends, including historical guard reads.
 * FIPS 205 ACVP vectors for the primitive, plus protocol transcript vectors and
   KDF vectors.
-* Exact `size` and intrinsic gas vectors for bind and every op variant.
+* Exact `size` and intrinsic gas vectors for bind and every op variant,
+  including the sponsor field and an empty `newGuard`, reproduced by at least
+  two independent implementations in different languages.
+* `qsbDomain` values for mainnet and testnet.
 * Exact receipt and log vectors (success and failure).
 * A recovery vector for one bucket rotated 64 times (the active key at
   `keyIndex = 64`).
@@ -898,6 +1061,9 @@ The following must be covered before activation:
   must abort block processing rather than produce a receipt.
 * Fuzzing of action decoding, of the guard record decoder, and of the ABI
   envelope.
+* A recovery vector for a bucket transferred to a new owner, found through
+  `BUCKETS_BY_GUARD_KEY`, and KDF vectors with and without a BIP-39 passphrase.
+* The full-handler benchmarks of §8 on every listed platform.
 * Vectors MUST be published with the reference implementation, before this IIP
   leaves Draft.
 
@@ -918,8 +1084,9 @@ the `qsb-draft/quantum-safe-staking-buckets` branch):
   the existing handlers, and the query API.
 * Feature-context gating; `tools/qsbctl` for testing on a local network.
 
-The reference implementation predates Draft 2 and must be updated for the
-changes listed under Revision History.
+The reference implementation predates Drafts 2 and 3 and must be updated for
+the changes listed under Revision History, including the move of guard checks
+into a shared bucket-mutation layer (§10).
 
 ## Security Considerations
 
@@ -935,8 +1102,20 @@ changes listed under Revision History.
 * **Exits land in ECDSA accounts.** WITHDRAW credits, and TRANSFER assigns to, a
   20-byte ECDSA address. After a break, funds taken out of the vault are exposed
   again. Holders SHOULD keep IOTX in the vault until post-quantum accounts
-  exist, and wallets SHOULD withdraw to a fresh address whose public key has
-  never been revealed.
+  exist. A fresh, never-spent address only delays exposure until it is first
+  spent from. Wallets MUST distinguish a fresh address from an independently
+  secured one, SHOULD generate the destination from a seed other than the
+  compromised one, and, after a publicly credible ECDSA break, SHOULD warn
+  against or disable ordinary EOA destinations by default.
+* **Transport after a break.** The guard protects the authorization, but a
+  `GuardedBucketOp` still travels in an ECDSA-signed sponsor envelope. After a
+  break, an attacker can forge transactions from a sponsor whose public key is
+  known, for example to drain its gas balance or consume its account nonces. It
+  cannot alter or forge the guarded op itself. Holders can use a fresh sponsor
+  account, or any third-party relayer with a bearer op. If a later IIP restricts
+  ECDSA envelopes (for example an IIP-64 emergency mode), it MUST keep a path for
+  submitting `GuardedBucketOp`, such as post-quantum sponsor accounts or a
+  protocol relay; this IIP reserves that interaction for IIP-64.
 * **Voter rewards.** IIP-59 reward routing is account-level and stays
   ECDSA-controlled (§10). Rewards already compounded into a guarded bucket are
   protected principal. After a break, an attacker holding the owner's ECDSA key
@@ -951,16 +1130,25 @@ changes listed under Revision History.
 * **Seed strength.** The guard key is no stronger than its seed (§12.2).
 * **Fault attacks on signing.** Hash-based signatures are vulnerable to fault
   injection during signing. Hedged signing and verify-before-release (§12.3)
-  are the mitigations.
+  mitigate transient faults. They do not protect against a compromised signing
+  device; transcript reconstruction from displayed fields and an independent
+  verifier (§12.3) narrow that risk.
 * **ClearGuard is an opt-out.** A guard-signed TRANSFER with `clearGuard`
   returns the bucket to ECDSA control. A later legacy withdraw or migration
   deletes the tombstone. This is intentional and requires the guard key; it is
-  not a recovery path for a lost guard key.
+  not a recovery path for a lost guard key. A clear to a contract or protocol
+  address is rejected (§6), because such a bucket could not be managed
+  afterwards.
 * **Lost guard key.** The bucket is permanently locked. This is mitigated by the
   seed-derived key (§12).
-* **Bearer authorizations.** A signed op can be submitted by anyone until its
-  deadline; `MAX_DEADLINE_WINDOW` bounds the exposure (§6). A copied op executes
-  the identical signed effect; a competing sponsor can only pay for it.
+* **Bearer authorizations and sponsor griefing.** An op with an empty `sponsor`
+  can be submitted by anyone until its deadline; `MAX_DEADLINE_WINDOW` bounds
+  the exposure (§6). A copied op executes only the identical signed effect, but
+  a competing submitter can execute it first, causing another already-broadcast
+  transaction carrying the same op to fail with `ErrGuardMismatch` and incur
+  gas. A malicious proposer can include both. Wallets and relayers SHOULD bind
+  the sponsor (§6) whenever it is known; the mempool policy (§9.6) drops stale
+  copies at honest nodes.
 * **Paid data.** Invalid-signature actions are includable. `G_BYTE` (§8) and the
   mempool policy (§9.6) keep them from becoming a cheap data channel.
 * **Hardware wallets.** Current hardware wallets cannot produce SLH-DSA
@@ -975,6 +1163,43 @@ changes listed under Revision History.
   external audit before activation.
 
 ## Revision History
+
+**Draft 3 (2026-10-28)** addresses an external cryptography review of Draft 2:
+
+* Simple Summary, Abstract, Rationale: the security claim is stated as the
+  property actually implemented (a guarded bucket cannot be moved with ECDSA
+  alone, within the stated scope); "no structure to attack" becomes "no
+  algebraic assumption".
+* §2: the full algorithm tuple is normative in this IIP, independent of later
+  IIP-64 edits.
+* §4: a clear increments `generation` and keeps `boundHeight`; counter overflow
+  has its own status `ErrGuardCounterOverflow` (§9.5).
+* §6: optional `sponsor` binding (field 15) against front-running and gas
+  griefing; address rules (no zero address, no TRANSFER to the current owner, no
+  `clearGuard` to a contract or protocol address); same-key ROTATE documented
+  as invalidating outstanding ops.
+* §7: transcripts begin with a chain-instance domain `qsbDomain` (chain ID and
+  genesis hash) instead of the bare chain ID; CALL commits to `sponsor`; ACCEPT
+  commits to `SHA-256(CALL)` instead of the deadline, so an ACCEPT is bound to
+  one operation; `candidateName` is signed as exact UTF-8 bytes. **All
+  transcript vectors change.**
+* §8: `size` is defined by an explicit formula (`QSBSizeV1`) rather than by a
+  canonical protobuf encoder; new block validity rule
+  `MAX_QSB_VERIFICATIONS_PER_BLOCK = 32`; `G_VERIFY` is marked provisional, with
+  the required multi-platform full-handler benchmarks listed.
+* §9.2: signatures MUST be verified before any state mutation; the option to
+  apply and roll back is removed.
+* §10: guard enforcement MUST sit in a shared bucket-mutation layer, and future
+  IIPs MUST classify new bucket mutations.
+* §11: the event data is ABI-encoded (128 bytes); an optional
+  `BUCKETS_BY_GUARD_KEY` index supports recovery.
+* §12: the KDF uses a `vaultIndex` independent of BIP-44 accounts (**all KDF
+  vectors change**); BIP-39 normalization and passphrase vectors; backup
+  verification; verify-before-release is scoped to transient faults; recovery
+  scan window is a default, not a limit, and uses the guard-key index.
+* Security Considerations: sponsor griefing, withdrawal destinations, and
+  transaction transport after an ECDSA break.
+* Test Cases: vectors and tests for all of the above.
 
 **Draft 2 (2026-10-28)** changes Draft 1 as follows:
 
