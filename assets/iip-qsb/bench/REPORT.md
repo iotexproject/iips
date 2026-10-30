@@ -1,5 +1,16 @@
 # SLH-DSA guard key spike
 
+> **Draft 1 measurements.** This report and the tests beside it predate IIP-65
+> Drafts 2 and 3. They use the Draft 1 signing format: context
+> `IOTEX-PQ-BUCKET-v1`, in-transcript tags `IOTX-QSB-CALL` / `IOTX-QSB-ACCEPT`,
+> and chain ID 4689 in `full_action_test.go`. They also use the Draft 1 gas
+> schedule of 16 gas per byte, which gives the 600,272 intrinsic-gas figure below.
+> The current transcripts (§7) and `G_BYTE = 100` (§8) make the intrinsic-gas
+> figures here out of date. The verification timings still apply: the
+> transcripts differ by a few dozen bytes, which SLH-DSA hashes once per
+> verification. The linux/amd64 full-handler benchmarks required by §8 will
+> replace this report.
+
 ## Result
 
 **Choose the SHA2 family for a native Go consensus verifier.** On the measured Apple M3 Pro, SHA2 verification was about 4.0–5.2× faster than the matching SHAKE set. SHA2 also signed and generated keys faster in every tested pair. Choose the security level separately: SHA2-128s if category 1 is acceptable, or SHA2-192s if category 3 is required. The `192f` variants sign faster but have 35,664-byte signatures and slower verification than `192s`, so they are a poor fit when verification and transaction size matter most.
