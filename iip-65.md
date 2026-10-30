@@ -223,6 +223,11 @@ Implementations MUST NOT substitute `isSelfStakeBucket` or the endorsement
 `Status`. Both can report false or none for records that are still referenced or
 have expired.
 
+An endorsement record is deleted only by an explicit `CandidateEndorsement`
+revoke; it does not disappear when it expires. A bucket that was ever endorsed
+and not revoked is therefore out of scope under (c). Wallets SHOULD detect this
+and guide the owner to revoke the endorsement before binding.
+
 *Rationale:* candidate-level operations (`CandidateActivate`,
 `CandidateDeactivate`, `CandidateTransferOwnership`, and the scheduled exit queue
 of IIP-61) can change a self-stake bucket's role and vote weight under the
@@ -233,9 +238,12 @@ candidate-key migration of IIP-64 §4.7.
 
 ### 4. State
 
-A new staking-namespace key prefix `_bucketGuard`, appended to the existing
-prefix enumeration (`_const, _bucket, _voterIndex, _candIndex, _endorsement,
-_candidateRewardSnapshot, _bucketGuard`), holds the guard records:
+A new staking-namespace key prefix `_bucketGuard = 9` holds the guard records.
+The tag is given explicitly rather than appended to the staking protocol's
+enumeration (`_const = 0` … `_candidateRewardSnapshot = 5`), because tags 6–8
+are already used in the same `StakingNamespace`: 6 by the contract-staking owner
+index (`LSDVoterIndexPrefix`) and 7–8 by the `eracow` copy-on-write layer
+(`ControlPrefix`, `EntryPrefix`). Each tag holds one record type.
 
 ```
 key   = _bucketGuard || uint64_be(bucketIndex)
@@ -423,11 +431,25 @@ qsbDomain = SHA-256("IoTeX-PQ-Bucket-Domain-v1" || uint32_be(chainID) || genesis
 
 `chainID` is the native chain ID `protocol.MustGetBlockchainCtx(ctx).ChainID`
 (mainnet 1, testnet 2), **not** the EVM network ID (4689 / 4690), and
-`genesisHash` is the hash of the network's genesis block. `qsbDomain` is a
-constant per network; wallets obtain it from the node or from the published
-vectors. Implementations MUST NOT derive the replay domain from the numeric
-chain ID alone. A network started from a copy of IoTeX state with a new genesis,
-or a private network reusing chain ID 1 or 2, therefore has a different domain.
+`genesisHash` is the network's genesis block hash, `block.GenesisHash()` in
+iotex-core. It equals `genesis.Genesis.Hash()`: a Blake2b-256 over a fixed
+subset of the genesis configuration (timestamp, gas limits, block interval,
+delegate counts, initial balances, genesis delegates, poll and rewarding
+parameters). Hardfork heights are not part of it, so it does not change at
+upgrades. Wallets cannot recompute it from public data. They read it from a
+node, as the parent hash of block 1 or as `eth_getBlockByNumber(0).hash`, or
+use the published values:
+
+| Network | `chainID` | `genesisHash` | `qsbDomain` |
+|---|---|---|---|
+| Mainnet | 1 | `b337983730981c2d50f114eed5da9dd20b83c8c5e130beefdb3001dc858cfe8b` | `49d87941a7e817ba842f0f3ec9252840a56d0d090ec50f1d6938fc8a82bed871` |
+| Testnet | 2 | `5e31a9f95ca4de82bd6f5ed9b465c6474bba27f1c5d31747393a555ce1f41607` | `5f917f80a9bc0a0ed98df4b02f74ebe111f8289f4e467a92e48fb3a2ae9f997d` |
+
+`qsbDomain` is a constant per network. Implementations MUST NOT derive the
+replay domain from the numeric chain ID alone. A network started from a copy of
+IoTeX state with a new genesis, or a private network reusing chain ID 1 or 2,
+therefore has a different domain, provided its genesis differs in one of the
+hashed fields.
 A chain that forks away from IoTeX after `QSBHeight` shares both values and
 MUST change its native chain ID, as with EIP-155 on Ethereum.
 
@@ -497,7 +519,7 @@ always replay under the parameters they were produced with.
 | `G_BASE` | 10,000 | |
 | `G_BYTE` | 100 per byte | Equal to the existing staking payload price |
 | `G_VERIFY` | 30,000 per verification | Pending linux/amd64 calibration |
-| `MAX_DEADLINE_WINDOW` | 120,960 blocks | About 7 days at 5-second blocks |
+| `MAX_DEADLINE_WINDOW` | 241,920 blocks | About 7 days at the 2.5-second block interval in effect since the Wake upgrade |
 | `MAX_QSB_VERIFICATIONS_PER_BLOCK` | 32 | Block validity rule, independent of the block gas limit |
 
 * **Size (`QSBSizeV1`).** Validity and pricing are defined over the **decoded**
@@ -529,7 +551,8 @@ always replay under the parameters they were produced with.
 * **Intrinsic gas:** `G_BASE + G_BYTE·size + k·G_VERIFY`, where `k` is the number
   of SLH-DSA verifications the action requires (1, or 2 with `newGuard`). A bind
   or a single-key op of about 16.3 KB costs about 1.67 M gas; an op with
-  `newGuard` of about 32.5 KB costs about 3.32 M gas. Exact vectors are given in
+  `newGuard` of about 32.5 KB costs about 3.32 M gas. At the 1 Qev (10^12 Rau)
+  minimum gas price, that is about 1.67 IOTX and 3.32 IOTX. Exact vectors are given in
   §Test Cases. The usual envelope rules (gas price, limit) apply unchanged.
 * **Why `G_BYTE` equals the staking payload price.** A `GuardedBucketOp` whose
   signature fails is still includable and charged (§9.3), so its bytes are paid
@@ -989,6 +1012,13 @@ choice is the security category and the on-chain size.
   existing actions would require signing over a byte encoding that does not
   uniquely identify the operation (`Unstake` and `WithdrawStake` share one
   payload encoding). A closed op set with a byte-exact transcript avoids this.
+* **Two counters.** `nonce` alone prevents replay of CALL: it never decreases,
+  and every guarded op advances it. The ACCEPT of a ROTATE or a TRANSFER
+  commits to it through `callHash`. `generation` is the key epoch: it is the
+  only counter in the BIND ACCEPT, and it lets clients tell a key change from an
+  executed op. It also keeps replay protection of key installations independent
+  of the invariant that every transition from guarded to unguarded advances
+  `nonce`, which later IIPs would otherwise have to preserve.
 * **Per-message contexts instead of in-transcript domain tags.** The FIPS 205
   context is length-delimited, so it separates CALL from ACCEPT, and both from
   every IIP-64 domain, without a hand-rolled tag format.
@@ -1069,8 +1099,9 @@ The following must be covered before activation:
 
 ## Implementation
 
-A reference implementation is in progress in `iotex-core` (PR #5059, built on
-the `qsb-draft/quantum-safe-staking-buckets` branch):
+A reference implementation is in progress in `iotex-core`
+([PR #5059](https://github.com/iotexproject/iotex-core/pull/5059)). It is based
+on `master` and reworks the `qsb-draft/quantum-safe-staking-buckets` scaffold:
 
 * `pkg/pqcrypto`: domain-neutral verification, the algorithm registry, and a
   transcript builder; `pkg/pqcrypto/signer` holds the wallet-side derivation and
@@ -1084,9 +1115,25 @@ the `qsb-draft/quantum-safe-staking-buckets` branch):
   the existing handlers, and the query API.
 * Feature-context gating; `tools/qsbctl` for testing on a local network.
 
-The reference implementation predates Drafts 2 and 3 and must be updated for
-the changes listed under Revision History, including the move of guard checks
-into a shared bucket-mutation layer (§10).
+The reference implementation follows Draft 3 for:
+* the transcripts and `qsbDomain` (§7);
+* the guard record, including the tombstone on clear (§4);
+* `G_BYTE` and `QSBSizeV1` (§8);
+* the event encoding (§11);
+* the KDF (§12).
+
+Its transcript, size, gas and KDF vectors were computed independently of the Go
+code.
+
+It does not yet implement:
+* the `sponsor` field on the wire, or its check;
+* the §6 address rules and `MAX_DEADLINE_WINDOW`;
+* `ErrGuardCounterOverflow`;
+* verify-before-mutate (§9.2) and the shared bucket-mutation layer (§10);
+* `MAX_QSB_VERIFICATIONS_PER_BLOCK`;
+* the mempool policy (§9.6);
+* `BUCKETS_BY_GUARD_KEY`;
+* the explicit state tag of §4 (it still uses 6).
 
 ## Security Considerations
 
@@ -1164,6 +1211,27 @@ into a shared bucket-mutation layer (§10).
 
 ## Revision History
 
+**Draft 3 corrections (2026-10-30)** fix inconsistencies left by the Draft 2 and
+Draft 3 edits. No transcript, encoding or rule changes; two parameter values
+are corrected:
+
+* §4: the state tag is given explicitly as `_bucketGuard = 9`. Appending it to
+  the enumeration would give 6, which the contract-staking owner index already
+  uses in the same namespace.
+* §8: `MAX_DEADLINE_WINDOW` is 241,920 blocks. 120,960 blocks is 7 days only at
+  5-second blocks, but mainnet has produced a block every 2.5 seconds since the
+  Wake upgrade.
+* §7: `genesisHash` is defined precisely, and the mainnet and testnet values of
+  `genesisHash` and `qsbDomain` are published.
+* §3: endorsement records persist until revoked; wallet guidance added.
+* §8: intrinsic gas is also stated in IOTX.
+* Rationale: why there are two counters.
+* Implementation: base branch and current status of the reference
+  implementation.
+* Revision History: a Draft 3 clear sets `boundHeight` to the clearing height,
+  as §4 states.
+* `assets/iip-qsb/bench/`: marked as Draft 1 measurements.
+
 **Draft 3 (2026-10-28)** addresses an external cryptography review of Draft 2:
 
 * Simple Summary, Abstract, Rationale: the security claim is stated as the
@@ -1172,7 +1240,8 @@ into a shared bucket-mutation layer (§10).
   algebraic assumption".
 * §2: the full algorithm tuple is normative in this IIP, independent of later
   IIP-64 edits.
-* §4: a clear increments `generation` and keeps `boundHeight`; counter overflow
+* §4: a clear increments `generation` and sets `boundHeight` to the clearing
+  height; counter overflow
   has its own status `ErrGuardCounterOverflow` (§9.5).
 * §6: optional `sponsor` binding (field 15) against front-running and gas
   griefing; address rules (no zero address, no TRANSFER to the current owner, no
