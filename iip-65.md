@@ -582,7 +582,7 @@ always replay under the parameters they were produced with.
 | `MAX_OP_NEWGUARD_SIZE` | 34,000 bytes | `GuardedBucketOp` with `newGuard` |
 | `G_BASE` | 10,000 | |
 | `G_BYTE` | 100 per byte | Equal to the existing staking payload price |
-| `G_VERIFY` | 30,000 per verification | Pending linux/amd64 calibration |
+| `G_VERIFY` | 150,000 per verification | From full-handler benchmarks on native linux/amd64 (below) |
 | `MAX_DEADLINE_WINDOW` | 241,920 blocks | Counted from `anchorHeight`. About 7 days at the 2.5-second block interval in effect since the Wake upgrade |
 
 * **Size (`QSBSizeV1`).** Validity and pricing are defined over the **decoded**
@@ -624,39 +624,49 @@ always replay under the parameters they were produced with.
 * **Limits** are checked in stateless validation.
 * **Intrinsic gas:** `G_BASE + G_BYTE·size + k·G_VERIFY`, where `k` is the number
   of SLH-DSA verifications the action requires (1, or 2 with `newGuard`). A bind
-  or a single-key op of about 16.3 KB costs about 1.67 M gas; an op with
-  `newGuard` of about 32.6 KB costs about 3.33 M gas. At the 1 Qev (10^12 Rau)
-  minimum gas price, that is about 1.67 IOTX and 3.33 IOTX. Exact size and gas
-  vectors are published with the reference implementation (see Test Cases).
+  or a single-key op of about 16.3 KB costs about 1.79 M gas; an op with
+  `newGuard` of about 32.6 KB costs about 3.57 M gas. At the 1 Qev (10^12 Rau)
+  minimum gas price, that is about 1.79 IOTX and 3.57 IOTX. Exact size and gas
+  vectors are in `assets/iip-qsb/vectors/` (see Test Cases).
   The usual envelope rules (gas price, limit) apply unchanged.
 * **Why `G_BYTE` equals the staking payload price.** A `GuardedBucketOp` whose
   signature fails is still includable and charged (§9.3), so its bytes are paid
   data on chain. Pricing them below other payloads would make this action the
   cheapest way to store arbitrary data. Bucket operations are rare, so the cost
   to honest users is small.
-* **`G_VERIFY = 30,000`.** SLH-DSA-SHA2-192s verification measured 0.233 ms
-  (CIRCL v1.6.5, Go 1.26.5, Apple M3 Pro, darwin/arm64). At the ~60 Mgas/s
-  execution budget assumed by current Ethereum repricing work (≈16.7 ns/gas)
-  this is ≈14,000 gas; `G_VERIFY` adds a 2× margin. The benchmark source,
-  dependency versions, and raw results are in `assets/iip-qsb/bench/`. This is
-  a single-platform primitive measurement, and `G_VERIFY` is **provisional**.
-  Before this IIP leaves Draft, the full handler (decoding, state reads,
-  verification, state writes, snapshot and revert) MUST be benchmarked on
-  linux/amd64 (with and without SHA extensions) and on linux/arm64, on the
-  lowest supported validator class, with valid and invalid signatures, one and
-  two verifications, maximum-size payloads, cold and warm caches, and a full
-  block of guarded actions. `G_VERIFY` MUST then be set from the slowest
-  supported configuration with a safety margin. Any change MUST be made by
-  amending this IIP and its vectors. Validators MUST run native binaries; an
-  emulated build (for example, Rosetta 2) measured about 8× slower.
+* **`G_VERIFY = 150,000`.** It is set from benchmarks of the full handler in
+  the reference implementation: blocks filled to the 25 M gas limit with
+  guarded actions go through the action pool and execution on the state
+  database (decoding, state reads, verification, state writes, snapshot and
+  revert, receipts), and the time per action is taken over an empty block.
+  Median of five blocks per action:
+
+  | Platform | 1 verification (UNSTAKE) | 2 verifications (ROTATE) |
+  |---|---:|---:|
+  | linux/amd64, AMD Ryzen 5 3600, SHA extensions | 0.70 ms | 1.21 ms |
+  | linux/amd64, AMD Ryzen 5 3600, SHA extensions off | 1.29 ms | 2.53 ms |
+  | darwin/arm64, Apple M1 Pro | 0.43 ms | 0.73 ms |
+
+  An action whose signature fails, either a CALL signature over another
+  message or an ACCEPT for another CALL, costs the same as a valid one. The
+  slowest configuration measured, without SHA extensions as on Intel server
+  processors before Ice Lake, costs about 77,000 gas per verification at the
+  ≈16.7 ns/gas (~60 Mgas/s) execution budget assumed by current Ethereum
+  repricing work. `G_VERIFY` keeps a 2× margin over it. A linux/arm64 VM on
+  Apple M1 Pro verified in 0.33 ms, faster than linux/amd64. The earlier
+  provisional value of 30,000 came from a single primitive measurement on
+  Apple M3 Pro (0.233 ms). The benchmarks, platforms, and raw results are in
+  `assets/iip-qsb/bench/`. Any change MUST be made by amending this IIP and its
+  vectors. Validators MUST run native binaries; an emulated build (for
+  example, Rosetta 2) measured about 8× slower.
 * **No per-block verification cap.** The block gas limit is the per-block bound
   on verification work and QSB data. At the current 25 M block gas limit, a
-  block holds about 15 guarded actions of 16 KB: about 3.5 ms of verification
-  and 0.25 MB of QSB data, far below the block interval and the default p2p
-  `MaxMessageSize` (12 MB). Gas overpays verification: a single-verification
-  action costs about 1.67 M gas for work worth about 14,000 gas, so even a 10×
-  higher block gas limit keeps verification at a few percent of the block
-  interval. A separate block-validity rule would have to be enforced
+  block holds 13 guarded actions of 16 KB: under 20 ms of execution on the
+  slowest platform measured, and 0.25 MB of QSB data, far below the 2.5-second
+  block interval and the default p2p `MaxMessageSize` (12 MB). Gas overpays
+  verification: a single-verification action costs about 1.79 M gas for work
+  worth about 77,000 gas there, so even a 10× higher block gas limit keeps
+  execution under a tenth of the block interval. A separate block-validity rule would have to be enforced
   identically when packing a block, when executing a single action, and when
   validating a block, and a packing path that missed it would let honest
   proposers produce invalid blocks. This IIP therefore defines no such rule.
@@ -1317,9 +1327,9 @@ The following must be covered before activation:
 * The full-handler benchmarks of §8 on every listed platform.
 * Vectors MUST be published with the reference implementation, before this IIP
   leaves Draft. The transcript, size, gas, and KDF vectors are in
-  `docs/qsb-spec-and-vectors.md` of iotex-core PR #5059, computed independently
-  of the Go code. They will be copied into `assets/iip-qsb/` once `G_VERIFY` is
-  final, since the gas vectors depend on it.
+  `assets/iip-qsb/vectors/vectors.json`, generated by `qsb_vectors.py` in the
+  same directory with the Python standard library only, independently of the
+  reference implementation, whose tests assert the same values.
 
 ## Implementation
 
@@ -1359,7 +1369,8 @@ Not yet done:
 * hedged signing in the wallet (§12.3), which signs deterministically today;
 * registering the guard record as its own Erigon storage object (§4);
 * the Test Cases items still open: ACVP vectors, fuzzing of action and ABI
-  decoding, the recovery vectors, and the full-handler benchmarks of §8.
+  decoding, the recovery vectors, and a full-handler run on a native
+  linux/arm64 server (§8).
 
 ## Security Considerations
 
@@ -1466,8 +1477,15 @@ raised in the IIP discussion. **All transcript and size/gas vectors change.**
 * Rationale, Test Cases, Implementation: updated for the above.
 
 Revised 2026-11-09 after checking the text against the reference
-implementation. No transcript, encoding, or parameter changes; behaviour that
-was left open is now specified:
+implementation, and after the full-handler benchmarks of §8. No transcript or
+encoding changes. One parameter changes, and behaviour that was left open is
+now specified:
+
+* §8: `G_VERIFY` is 150,000, set from full-handler benchmarks on native
+  linux/amd64 with and without SHA extensions, replacing the provisional
+  30,000. Every gas vector rises by 120,000 per verification. The
+  measurements are in `assets/iip-qsb/bench/` and the vectors in
+  `assets/iip-qsb/vectors/`.
 
 * §6: the native protocol addresses refused by TRANSFER with `clearGuard` are
   listed exactly; the Web3 methods, their selectors, and the zero-address
@@ -1478,13 +1496,13 @@ was left open is now specified:
 * §10: where each existing handler checks `ErrBucketGuarded` is fixed.
 * §4, §11: the query result for a bucket without a guard record, the
   `eth_call` return layout, and the event's `sponsor` for BIND are specified.
-* §8: the anchor size is stated exactly; the figures for ops with `newGuard`
-  are corrected to about 32.6 KB and 3.33 M gas.
+* §8: the anchor size is stated exactly; the size of ops with `newGuard` is
+  corrected to about 32.6 KB.
 * §9.5: the receipt statuses and oneof numbers are final in `iotex-proto`
   v0.6.14.
 * §12.1: a wallet may confirm before deriving a key beyond its scan window.
-* Test Cases, Implementation: where the vectors are published, and the current
-  state of the reference implementation.
+* Test Cases, Implementation: the vectors are published with a generator, and
+  the current state of the reference implementation is described.
 
 **Draft 3 corrections (2026-10-30)** fix inconsistencies left by the Draft 2 and
 Draft 3 edits. No transcript, encoding or rule changes; two parameter values
