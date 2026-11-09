@@ -7,7 +7,7 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-10-19
-Revised: 2026-11-03 (Draft 4)
+Revised: 2026-11-09 (Draft 4)
 Requires: 59, 61, 64
 ```
 
@@ -273,8 +273,8 @@ message BucketGuard {
   monotonic. Whenever a native bucket is permanently deleted, by any path
   (guarded WITHDRAW, or a legacy `WithdrawStake` or `MigrateStake` on a bucket
   that was cleared earlier), its guard record, including a tombstone, MUST be
-  deleted in the same snapshot. A guard query for a deleted bucket returns
-  not-found.
+  deleted in the same snapshot. A guard query for a deleted bucket returns the
+  same empty record as for a bucket that was never guarded (§11).
 * The record MUST be written through the same state manager and snapshot as the
   bucket, so that revert and historical reads cover it. On the Erigon backend it
   MUST be registered as a storage object.
@@ -395,9 +395,24 @@ layout. In addition:
 * `newOwner` (TRANSFER): a contract cannot call the native staking protocol, so
   a contract-owned bucket can be managed only through its guard. A TRANSFER with
   `clearGuard` MUST therefore fail (`ErrGuardScope`) if `newOwner` has contract
-  code at execution time or is the address of a native protocol (staking,
-  rewarding, poll, and so on). A TRANSFER with `newGuard` to such an address is
-  permitted.
+  code at execution time or is a native protocol address. A TRANSFER with
+  `newGuard` to such an address is permitted.
+
+  Under `ParamsV1` the native protocol addresses are exactly the following
+  seven. Each is the `hash160` (the last 20 bytes of Keccak-256) of the
+  protocol ID string, as the node derives protocol addresses:
+
+  | Protocol ID | Address |
+  |---|---|
+  | `account` | `io1enfa3p3aysdueq85vvprzzndjs4fp6z32hf7xs` |
+  | `staking` | `io1qnpz47hx5q6r3w876axtrn6yz95d70cjl35r53` |
+  | `rewarding` | `io154mvzs09vkgn0hw6gg3ayzw5w39jzp47f8py9v` |
+  | `poll` | `io1ze4hg0pvrftuj0pw90p7z6wj3wae7mdrwws6d5` |
+  | `rolldpos` | `io1qsfhpcq2wywds8dpjx8suj2ytx4d4egwxzqsg3` |
+  | `smart_contract` | `io1x9z4hmwqjs54erfyasflusrcu60vzskvsp3sr2` |
+  | `bucketPool` (the staking bucket pool) | `io1695255mrd2xflalqne9htvu3euvdy35raj4q3a` |
+
+  A protocol added later joins this set only through a new parameter version.
 
 **What the guard authorizes.** TRANSFER and WITHDRAW act on the bucket's
 execution-time amount, including any deposits and IIP-59 compounding that
@@ -408,7 +423,42 @@ guard signature, so the signed effect is "the whole bucket".
 transactions to the native staking address, one ABI method per action and op.
 The ABI form is only an envelope. It MUST decode to the same
 `BindBucketGuard` / `GuardedBucketOp` value, and validity, transcripts, and gas
-are defined over that decoded value.
+are defined over that decoded value. The methods use standard Solidity ABI
+encoding; the selector is the first 4 bytes of Keccak-256 of the signature:
+
+```solidity
+// 0xe2a85788
+bindBucketGuard(uint64 bucketIndex, uint32 algID, bytes publicKey, bytes acceptSig)
+// 0x1a5a08f3
+guardedUnstake(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, address sponsor, bytes sig)
+// 0xc09d7f79
+guardedWithdraw(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, address recipient, address sponsor, bytes sig)
+// 0x5803001c
+guardedTransfer(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, address newOwner, bool clearGuard,
+    uint32 newAlgID, bytes newPublicKey, bytes newAcceptSig, address sponsor, bytes sig)
+// 0xf1617a20
+guardedChangeCandidate(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, string candidateName,
+    address expectedCandidateID, address sponsor, bytes sig)
+// 0x47324d58
+guardedRestake(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, uint32 duration, bool autoStake,
+    address sponsor, bytes sig)
+// 0x34e47380
+guardedRotate(uint64 bucketIndex, uint64 generation, uint64 nonce, uint64 deadline,
+    uint64 anchorHeight, bytes32 anchorHash, uint32 newAlgID, bytes newPublicKey,
+    bytes newAcceptSig, address sponsor, bytes sig)
+```
+
+The op is given by the method. `anchorHash` is the 32-byte block hash. A
+`sponsor` of the zero address decodes to an empty `sponsor`; a non-empty
+`sponsor` cannot be the zero address, so the mapping is unambiguous.
+`newGuard` is absent when `newAlgID`, `newPublicKey`, and `newAcceptSig` are
+all empty, and present otherwise; a present but empty `newGuard`, which fails
+the per-op field rules anyway, cannot be expressed in this form.
 
 ### 7. Signed transcripts
 
@@ -566,16 +616,19 @@ always replay under the parameters they were produced with.
   cannot overflow. Ingress nodes SHOULD additionally reject non-canonical wire
   encodings, but this is relay policy, not consensus. Cross-language `size`
   vectors MUST cover each field, including the 2-byte tags of fields 16 and 17,
-  and the empty-`newGuard` case. The anchor adds 41 bytes to every
-  `GuardedBucketOp` while `anchorHeight < 2^28` (6 for `anchorHeight`, 35 for
-  `anchorHash`), which is 4,100 gas at `G_BYTE`.
+  and the empty-`newGuard` case. The anchor adds `37 + len(varint(anchorHeight))`
+  bytes to every `GuardedBucketOp` (a 2-byte tag and the varint for
+  `anchorHeight`; a 2-byte tag, a 1-byte length, and 32 bytes for
+  `anchorHash`). That is 41 bytes, or 4,100 gas at `G_BYTE`, for
+  `2^21 ≤ anchorHeight < 2^28`, which covers mainnet heights.
 * **Limits** are checked in stateless validation.
 * **Intrinsic gas:** `G_BASE + G_BYTE·size + k·G_VERIFY`, where `k` is the number
   of SLH-DSA verifications the action requires (1, or 2 with `newGuard`). A bind
   or a single-key op of about 16.3 KB costs about 1.67 M gas; an op with
-  `newGuard` of about 32.5 KB costs about 3.32 M gas. At the 1 Qev (10^12 Rau)
-  minimum gas price, that is about 1.67 IOTX and 3.32 IOTX. Exact vectors are given in
-  §Test Cases. The usual envelope rules (gas price, limit) apply unchanged.
+  `newGuard` of about 32.6 KB costs about 3.33 M gas. At the 1 Qev (10^12 Rau)
+  minimum gas price, that is about 1.67 IOTX and 3.33 IOTX. Exact size and gas
+  vectors are published with the reference implementation (see Test Cases).
+  The usual envelope rules (gas price, limit) apply unchanged.
 * **Why `G_BYTE` equals the staking payload price.** A `GuardedBucketOp` whose
   signature fails is still includable and charged (§9.3), so its bytes are paid
   data on chain. Pricing them below other payloads would make this action the
@@ -643,11 +696,35 @@ for the op (e.g. restake duration bound, candidate-name format); intrinsic gas.
    looked up. A failed read of such a hash is a storage error (§9.3), not a
    mismatch. The block being executed has no hash yet, so
    `anchorHeight = blockHeight` fails the hash comparison.
-5. Op-specific state preconditions, with the existing handlers' receipt statuses
-   (maturity, auto-stake, unstaked, etc.); for CHANGE_CANDIDATE the resolved
-   candidate's identifier MUST equal `expectedCandidateID`
-   (`ErrCandidateMismatch`); for TRANSFER the `newOwner` rules of §6
-   (`ErrGuardScope`).
+5. Op-specific state preconditions, with the existing handlers' receipt
+   statuses, in this order:
+   * UNSTAKE: the bucket's candidate exists (`ErrCandidateNotExist`); the
+     bucket is not unstaked and `autoStake` is off (`ErrInvalidBucketType`);
+     the staked duration has elapsed (`ErrUnstakeBeforeMaturity`); the bucket
+     is not endorsed (`ErrInvalidBucketType`); a self-stake bucket may exit
+     (`ErrUnstakeBeforeMaturity`).
+   * WITHDRAW: the bucket is unstaked (`ErrWithdrawBeforeUnstake`); the
+     withdrawal waiting period has elapsed (`ErrWithdrawBeforeMaturity`); the
+     bucket pool covers the amount (`ErrWriteAccount`).
+   * TRANSFER: the `newOwner` rules of §6, each with `ErrGuardScope`:
+     `newOwner` differs from the current owner; then, with `clearGuard`,
+     `newOwner` is not a native protocol address and has no contract code.
+   * CHANGE_CANDIDATE: `candidateName` resolves to a candidate
+     (`ErrCandidateNotExist`); its identifier equals `expectedCandidateID`
+     (`ErrCandidateMismatch`); the bucket's current candidate exists
+     (`ErrCandidateNotExist`); the bucket is not unstaked
+     (`ErrInvalidBucketType`); the new candidate differs from the current one
+     (`ErrCandidateAlreadyExist`).
+   * RESTAKE: the bucket's candidate exists (`ErrCandidateNotExist`); the
+     bucket is not unstaked (`ErrInvalidBucketType`); if the duration is
+     reduced, `autoStake` is off (`ErrInvalidBucketType`) and the staked
+     duration has elapsed (`ErrReduceDurationBeforeMaturity`).
+   * ROTATE: none.
+
+   Then the vote updates of the existing handler, with its statuses. The scope
+   rules of §3 keep a guarded bucket from being endorsed or a self-stake
+   bucket, so the endorsement and self-stake checks cannot fail here, and an
+   implementation MAY omit them.
 6. Verify CALL, then ACCEPT if present (`ErrGuardSignature`).
 7. Apply the transition (§9.4) through the guarded mutation layer of §10.
 8. Emit success logs; settle.
@@ -692,7 +769,10 @@ Splitting reused legacy handler logic into the two phases is fork-gated.
 Pre-fork code paths MUST be preserved unchanged: before Zanzibar Gamma a failed
 receipt kept partial writes, so the order of checks and writes is part of
 history, and a replay from genesis depends on it. From `QSBHeight`, legacy
-actions MAY use the split logic, and their receipt statuses MUST NOT change.
+actions MAY use the split logic. The receipt status of every deterministic
+outcome MUST NOT change. A storage error that the existing code reports as a
+receipt (for example `ErrUnknown`) MAY instead become fatal, as §9.3 requires
+for the new actions.
 
 #### 9.3 Failure classification
 
@@ -749,14 +829,14 @@ guard signature leads out of the Guarded state.*
 
 #### 9.5 Receipt statuses
 
-New `ReceiptStatus` values (proposed numbers, final assignment in `iotex-proto`):
+New `ReceiptStatus` values, as assigned in `iotex-proto` v0.6.14:
 `ErrBucketGuarded = 216`, `ErrBucketNotGuarded = 217`, `ErrGuardMismatch = 218`,
 `ErrGuardSignature = 219`, `ErrGuardScope = 220`, `ErrCandidateMismatch = 221`.
 A counter overflow (§4) is reported as `ErrGuardMismatch`; there is no separate
 status.
 Existing `ErrInvalidBucketIndex (202)` and `ErrUnauthorizedOperator (203)` are
-reused as stated. Proposed `ActionCore` oneof fields: `bindBucketGuard = 59`,
-`guardedBucketOp = 60`.
+reused as stated. The `ActionCore` oneof fields are `bindBucketGuard = 59` and
+`guardedBucketOp = 60` (`iotex-proto` v0.6.14).
 
 #### 9.6 Mempool policy (non-consensus)
 
@@ -810,7 +890,19 @@ endorsement record carries an explicit authorization:
 Handler-level checks remain and decide the receipt status: a legacy action on a
 guarded bucket reports `ErrBucketGuarded` before its later preconditions. For
 example, a legacy `Restake` on a guarded bucket that is also unstaked fails with
-`ErrBucketGuarded`, not with the status of its unstake check. The layer is a
+`ErrBucketGuarded`, not with the status of its unstake check. The guard check
+runs right after the checks below, which keep their existing statuses:
+
+| Existing action | Checks before `ErrBucketGuarded` |
+|---|---|
+| `Unstake`, `WithdrawStake`, `Restake` | the caller's account; the bucket exists; the caller owns it |
+| `ChangeCandidate` | the caller's account; `candidateName` resolves; the bucket exists; the caller owns it; it is not a self-stake bucket |
+| `TransferStake` | the caller's account; the bucket exists; the caller owns it and it is not a self-stake bucket, or the caller presents a valid consignment |
+| `MigrateStake` | the bucket exists; the caller's account; the bucket's candidate exists; the caller owns the bucket |
+| `CandidateEndorsement` | the bucket exists |
+| `CandidateActivate` | the bucket exists |
+
+`DepositToStake` is not rejected: it only adds stake. The layer is a
 second line of defense, and handler-level checks alone do not satisfy this
 requirement. The layer is active only from `QSBHeight`; blocks below it replay
 through the existing code paths.
@@ -859,6 +951,8 @@ event BucketGuard(uint64 indexed bucketIndex, uint64 indexed op, bytes32 indexed
   128 bytes:
   * The counters are the resulting values. For WITHDRAW the record is deleted and
     `nonce` is the consumed value plus 1.
+  * `sponsor` is the outer sender of the action: the bucket owner for BIND, and
+    the submitting account for an op, whether or not the op binds a `sponsor`.
   * `counterparty` is `newOwner` for TRANSFER, `recipient` for WITHDRAW, and the
     zero address otherwise.
 
@@ -869,10 +963,20 @@ from the bucket pool to `recipient`. On failure, only the gas-settlement
 transaction logs and the failed status appear.
 
 The guard of a bucket is queryable at any height through
-`ReadStakingData` (method `BUCKET_GUARD`) and through `eth_call` of
-`bucketGuard(uint64)` on the native staking address. Both return `algID`,
-`publicKey`, `generation`, `nonce`, and `boundHeight`; an empty `publicKey`
-means unguarded.
+`ReadStakingData` (method `BUCKET_GUARD = 27`, request `bucketGuard = 11`),
+which returns an `iotextypes.BucketGuard` (`algID`, `publicKey`, `generation`,
+`nonce`, `boundHeight`), and through `eth_call` on the native staking address
+of
+
+```solidity
+// 0xaf7df262
+bucketGuard(uint64 index) view returns (bool guarded, uint32 algID, bytes publicKey,
+    uint64 generation, uint64 nonce, uint64 boundHeight)
+```
+
+where `guarded` is true exactly when `publicKey` is non-empty. A tombstone
+returns its counters with an empty key. A bucket without a guard record,
+because it was never guarded or has been deleted, returns an all-zero record.
 
 Wallet recovery (§12.4) finds buckets by `guardKeyID` through off-chain
 indexers of the `BucketGuard` event's `topic[3]`. Nodes MAY also serve such an
@@ -908,7 +1012,10 @@ okm = HKDF-Expand(prk, info = "slh-dsa-sha2-192s" || uint32_be(vaultIndex)
   incremented each time a new guard key is derived (bind, rotate, or receiving a
   transfer; for a TRANSFER with `newGuard`, the **new owner's** wallet derives
   the key and signs ACCEPT). A wallet MAY reuse one key across several buckets,
-  as transcripts are bucket-scoped. There is no upper bound on `keyIndex`.
+  as transcripts are bucket-scoped. There is no upper bound on `keyIndex`. A
+  wallet MAY ask for confirmation before deriving a new key beyond its default
+  recovery scan window (§12.4), which a later recovery with that window would
+  not search.
 * Because SLH-DSA is stateless, reusing a key index (across buckets or after a
   lost high-water mark) is **safe**; index allocation is a convenience, not a
   security requirement.
@@ -1209,48 +1316,50 @@ The following must be covered before activation:
   `guardKeyID` event topic, and KDF vectors with and without a BIP-39 passphrase.
 * The full-handler benchmarks of §8 on every listed platform.
 * Vectors MUST be published with the reference implementation, before this IIP
-  leaves Draft.
+  leaves Draft. The transcript, size, gas, and KDF vectors are in
+  `docs/qsb-spec-and-vectors.md` of iotex-core PR #5059, computed independently
+  of the Go code. They will be copied into `assets/iip-qsb/` once `G_VERIFY` is
+  final, since the gas vectors depend on it.
 
 ## Implementation
 
-A reference implementation is in progress in `iotex-core`
-([PR #5059](https://github.com/iotexproject/iotex-core/pull/5059)). It is based
-on `master` and reworks the `qsb-draft/quantum-safe-staking-buckets` scaffold:
+The reference implementation is iotex-core
+[PR #5059](https://github.com/iotexproject/iotex-core/pull/5059), based on
+`master`. It implements Draft 4:
 
 * `pkg/pqcrypto`: domain-neutral verification, the algorithm registry, and a
-  transcript builder; `pkg/pqcrypto/signer` holds the wallet-side derivation and
-  signing, and is not imported by consensus code.
+  transcript builder. `pkg/pqcrypto/signer` holds the wallet-side derivation
+  and signing, and is not imported by consensus code.
 * `action/protocol/staking/bucketguard`: the rules of this IIP as pure functions
   (`AuthorizeBind`, `CheckOp`, `CheckCandidate`, `VerifyOp`, `Next`,
-  `RejectIfGuarded`) with versioned `Params`.
-* `action/`: the new action types and the web3 envelope, plus the protobuf
-  messages in `iotex-proto`.
-* `action/protocol/staking`: guard state, the two handlers, the guard checks in
-  the existing handlers, and the query API.
-* Feature-context gating; `tools/qsbctl` for testing on a local network.
+  `RejectIfGuarded`), the `Grant` that only `VerifyOp` issues, `Guard.KeyID`,
+  and versioned `Params`.
+* `action/`: the two action types and the Web3 envelope of §6, published in the
+  native staking ABI. The protobuf messages are released in `iotex-proto`
+  v0.6.14.
+* `action/protocol/staking`:
+  * the guard record under `_bucketGuard = 9`;
+  * the two handlers, with the step order of §5 and §9.2;
+  * the legacy operations split into check and apply (§9.2), used from the
+    fork;
+  * the write layer of §10 over buckets, self-stake references, and
+    endorsements;
+  * the guard checks in the existing handlers;
+  * the `BucketGuard` event and the query API.
+* `ioctl stake2 guard`: a wallet with an encrypted `QSB-KDF-v1` vault, one-step
+  and offline signing (§12.3), and two-party transfers.
 
-PR #5059 is being updated to Draft 4. At the time of this revision it follows
-Draft 3 for:
-* the transcripts and `qsbDomain` (§7);
-* the guard record, including the tombstone on clear (§4);
-* `G_BYTE` and `QSBSizeV1` (§8);
-* the event encoding (§11);
-* the KDF (§12).
+The transcript, size, gas, and KDF vectors were computed independently of the
+Go code. The implementation has run every op end to end on a test network.
 
-Its transcript, size, gas and KDF vectors were computed independently of the Go
-code. A counter overflow already fails with `ErrGuardMismatch`.
-
-It does not yet implement:
-* the Draft 4 format changes: the recent-block anchor (§6, §7, §9.2), SHA-512
-  `callHash` (§7), the 2-byte tags in `QSBSizeV1` (§8), and the `guardKeyID`
-  event topic (§11);
-* the `sponsor` field on the wire, or its check;
-* the §6 address rules and `MAX_DEADLINE_WINDOW`;
-* the `anchorHeight`, `anchorHash`, and `sponsor` arguments of the web3 ABI
-  methods;
-* verify-before-mutate (§9.2) and the shared mutation layer (§10);
-* the mempool policy (§9.6);
-* the explicit state tag of §4 (it still uses 6).
+Not yet done:
+* the fork is gated by a work-in-progress flag, not a named `QSBHeight`;
+* the mempool policy (§9.6) and the optional `BUCKETS_BY_GUARD_KEY` index
+  (§11);
+* hedged signing in the wallet (§12.3), which signs deterministically today;
+* registering the guard record as its own Erigon storage object (§4);
+* the Test Cases items still open: ACVP vectors, fuzzing of action and ABI
+  decoding, the recovery vectors, and the full-handler benchmarks of §8.
 
 ## Security Considerations
 
@@ -1328,8 +1437,8 @@ It does not yet implement:
 
 ## Revision History
 
-**Draft 4 (2026-11-03)** settles the Draft 3 review topics raised in the IIP
-discussion. **All transcript and size/gas vectors change.**
+**Draft 4 (2026-11-03, revised 2026-11-09)** settles the Draft 3 review topics
+raised in the IIP discussion. **All transcript and size/gas vectors change.**
 
 * §6, §7, §8, §9.1, §9.2: a `GuardedBucketOp` carries a recent-block anchor
   (`anchorHeight = 16`, `anchorHash = 17`), signed in CALL after `deadline`.
@@ -1339,7 +1448,7 @@ discussion. **All transcript and size/gas vectors change.**
 * §7: `callHash = SHA-512(CALL)`, 64 bytes (64 zero bytes for BIND), to meet
   the category-3 collision target.
 * §8: `QSBSizeV1` uses a 2-byte tag for fields 16 and 17; the anchor adds 41
-  bytes per op.
+  bytes per op at mainnet heights.
 * §8: `MAX_QSB_VERIFICATIONS_PER_BLOCK` and its block-validity rule are
   removed; `G_VERIFY` MUST be re-evaluated whenever the block gas limit is
   raised.
@@ -1355,6 +1464,27 @@ discussion. **All transcript and size/gas vectors change.**
   `topic[0]`, data unchanged); recovery uses indexers of that topic, and the node-side
   `BUCKETS_BY_GUARD_KEY` index becomes MAY.
 * Rationale, Test Cases, Implementation: updated for the above.
+
+Revised 2026-11-09 after checking the text against the reference
+implementation. No transcript, encoding, or parameter changes; behaviour that
+was left open is now specified:
+
+* §6: the native protocol addresses refused by TRANSFER with `clearGuard` are
+  listed exactly; the Web3 methods, their selectors, and the zero-address
+  `sponsor` convention are specified.
+* §9.2: the order of the checks inside step 5 is fixed per op. Legacy actions
+  that use the split logic keep the status of every deterministic outcome, and
+  their storage errors may become fatal.
+* §10: where each existing handler checks `ErrBucketGuarded` is fixed.
+* §4, §11: the query result for a bucket without a guard record, the
+  `eth_call` return layout, and the event's `sponsor` for BIND are specified.
+* §8: the anchor size is stated exactly; the figures for ops with `newGuard`
+  are corrected to about 32.6 KB and 3.33 M gas.
+* §9.5: the receipt statuses and oneof numbers are final in `iotex-proto`
+  v0.6.14.
+* §12.1: a wallet may confirm before deriving a key beyond its scan window.
+* Test Cases, Implementation: where the vectors are published, and the current
+  state of the reference implementation.
 
 **Draft 3 corrections (2026-10-30)** fix inconsistencies left by the Draft 2 and
 Draft 3 edits. No transcript, encoding or rule changes; two parameter values
