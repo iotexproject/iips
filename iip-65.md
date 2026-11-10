@@ -705,7 +705,10 @@ for the op (e.g. restake duration bound, candidate-name format); intrinsic gas.
    they pass, so only the most recent `MAX_DEADLINE_WINDOW` blocks are ever
    looked up. A failed read of such a hash is a storage error (§9.3), not a
    mismatch. The block being executed has no hash yet, so
-   `anchorHeight = blockHeight` fails the hash comparison.
+   `anchorHeight = blockHeight` fails the hash comparison. Validators MUST
+   therefore keep the hashes of at least the most recent `MAX_DEADLINE_WINDOW`
+   blocks. A node restored from a state-only snapshot without that history
+   cannot execute a guarded op and stops at the first one.
 5. Op-specific state preconditions, with the existing handlers' receipt
    statuses, in this order:
    * UNSTAKE: the bucket's candidate exists (`ErrCandidateNotExist`); the
