@@ -38,7 +38,8 @@ func appendBool(b []byte, v bool) []byte {
 	return append(b, 0x00)
 }
 
-// callTranscript is the §7 CALL transcript for a guarded UNSTAKE. It is a
+// callTranscript is the Draft 1 CALL transcript for a guarded UNSTAKE (see the
+// note at the top of REPORT.md); the Draft 3 layout of §7 differs. It is a
 // full-action proxy: it measures the dominant verify and signature-byte costs,
 // not canonical proto encoding or the staking state transition.
 func callTranscript() []byte {
@@ -65,7 +66,7 @@ func callTranscript() []byte {
 	return b
 }
 
-// acceptTranscript is the §7 ACCEPT transcript for a BIND at generation 1.
+// acceptTranscript is the Draft 1 ACCEPT transcript for a BIND at generation 1.
 func acceptTranscript(pub []byte) []byte {
 	owner := make([]byte, 20)
 	for i := range owner {
