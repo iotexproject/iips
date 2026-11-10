@@ -645,6 +645,8 @@ always replay under the parameters they were produced with.
   |---|---:|---:|
   | linux/amd64, AMD Ryzen 5 3600, SHA extensions | 0.70 ms | 1.21 ms |
   | linux/amd64, AMD Ryzen 5 3600, SHA extensions off | 1.29 ms | 2.53 ms |
+  | linux/amd64, AMD EPYC 9V74 (4 vCPU), SHA extensions | 0.73 ms | 1.48 ms |
+  | linux/arm64, Arm Neoverse-N2 (4 vCPU) | 0.65 ms | 1.11 ms |
   | darwin/arm64, Apple M1 Pro | 0.43 ms | 0.73 ms |
 
   An action whose signature fails, either a CALL signature over another
@@ -652,8 +654,8 @@ always replay under the parameters they were produced with.
   slowest configuration measured, without SHA extensions as on Intel server
   processors before Ice Lake, costs about 77,000 gas per verification at the
   ≈16.7 ns/gas (~60 Mgas/s) execution budget assumed by current Ethereum
-  repricing work. `G_VERIFY` keeps a 2× margin over it. A linux/arm64 VM on
-  Apple M1 Pro verified in 0.33 ms, faster than linux/amd64. The earlier
+  repricing work. `G_VERIFY` keeps a 2× margin over it. linux/arm64 is
+  faster than linux/amd64 on the machines measured. The earlier
   provisional value of 30,000 came from a single primitive measurement on
   Apple M3 Pro (0.233 ms). The benchmarks, platforms, and raw results are in
   `assets/iip-qsb/bench/`. Any change MUST be made by amending this IIP and its
@@ -1369,11 +1371,13 @@ Not yet done:
 * the fork is gated by a work-in-progress flag, not a named `QSBHeight`;
 * the mempool policy (§9.6) and the optional `BUCKETS_BY_GUARD_KEY` index
   (§11);
-* hedged signing in the wallet (§12.3), which signs deterministically today;
-* registering the guard record as its own Erigon storage object (§4);
-* the Test Cases items still open: ACVP vectors, fuzzing of action and ABI
-  decoding, the recovery vectors, and a full-handler run on a native
-  linux/arm64 server (§8).
+* the Test Cases items still open: fuzzing of action and ABI decoding in CI,
+  and the recovery vectors.
+
+Done since Draft 4 was first published: hedged signing in the wallet
+(§12.3), the guard record registered as an Erigon storage object (§4), the
+NIST ACVP vectors for SLH-DSA-SHA2-192s in CI, and the full-handler
+benchmarks of §8 on linux/amd64 and native linux/arm64.
 
 ## Security Considerations
 
@@ -1485,8 +1489,8 @@ encoding changes. One parameter changes, and behaviour that was left open is
 now specified:
 
 * §8: `G_VERIFY` is 150,000, set from full-handler benchmarks on native
-  linux/amd64 with and without SHA extensions, replacing the provisional
-  30,000. Every gas vector rises by 120,000 per verification. The
+  linux/amd64 with and without SHA extensions, and checked on native
+  linux/arm64, replacing the provisional 30,000. Every gas vector rises by 120,000 per verification. The
   measurements are in `assets/iip-qsb/bench/` and the vectors in
   `assets/iip-qsb/vectors/`.
 
