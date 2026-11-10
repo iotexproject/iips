@@ -1,0 +1,33 @@
+    bucket_guard_perf_test.go:153: qsb-perf setup block_gas_limit=25000000 one_verify_ops=13 two_verify_ops=7 rounds=5 cpus=4
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=11 ops=0 gas=0 bytes=728 mint=630.82µs commit=1.110512ms decode=14.912µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=12 ops=13 gas=23236200 bytes=214545 mint=10.137416ms commit=1.615343ms decode=939.97µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=13 ops=7 gas=24959200 bytes=229858 mint=11.651714ms commit=2.442848ms decode=1.071774ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=14 ops=13 gas=23238800 bytes=214571 mint=9.664467ms commit=2.285273ms decode=1.02093ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=15 ops=7 gas=24960600 bytes=229872 mint=10.56468ms commit=3.425973ms decode=1.043643ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=16 ops=0 gas=0 bytes=728 mint=761.9µs commit=18.427019ms decode=24.106µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=17 ops=13 gas=23236200 bytes=214545 mint=11.533394ms commit=25.620118ms decode=1.136119ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=18 ops=7 gas=24960600 bytes=229872 mint=11.480606ms commit=3.39702ms decode=1.067848ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=19 ops=13 gas=23238800 bytes=214571 mint=9.718193ms commit=1.877578ms decode=1.042321ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=20 ops=7 gas=24960600 bytes=229872 mint=10.2086ms commit=2.751351ms decode=1.063793ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=21 ops=0 gas=0 bytes=728 mint=675.373µs commit=1.042431ms decode=13.71µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=22 ops=13 gas=23236200 bytes=214545 mint=9.950185ms commit=54.728095ms decode=704.284µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=23 ops=7 gas=24960600 bytes=229872 mint=11.055608ms commit=3.133132ms decode=1.089991ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=24 ops=13 gas=23238800 bytes=214571 mint=10.099633ms commit=1.960631ms decode=1.062812ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=25 ops=7 gas=24960600 bytes=229872 mint=9.983233ms commit=6.840553ms decode=1.076472ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=26 ops=0 gas=0 bytes=728 mint=650.852µs commit=980.802µs decode=13.099µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=27 ops=13 gas=23236200 bytes=214551 mint=10.421452ms commit=1.238169ms decode=664.876µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=28 ops=7 gas=24960600 bytes=229879 mint=10.232339ms commit=2.03525ms decode=1.096ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=29 ops=13 gas=23238800 bytes=214584 mint=10.429139ms commit=2.029941ms decode=1.011826ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=30 ops=7 gas=24960600 bytes=229879 mint=10.305708ms commit=2.142578ms decode=1.047508ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=31 ops=0 gas=0 bytes=728 mint=706.854µs commit=754.879µs decode=12.439µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=32 ops=13 gas=23236200 bytes=214558 mint=10.142855ms commit=34.072313ms decode=714.88µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=33 ops=7 gas=24960600 bytes=229879 mint=10.916505ms commit=1.18426ms decode=714.249µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=34 ops=13 gas=23238800 bytes=214584 mint=9.739861ms commit=1.268203ms decode=669.423µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=35 ops=7 gas=24960600 bytes=229878 mint=9.974641ms commit=1.416751ms decode=1.076311ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=unstake ops=13 gas_per_op=1787400 median_mint=10.142855ms empty_mint=675.373µs exec_per_op=728.267µs median_commit=25.620118ms empty_commit=1.042431ms median_decode=714.88µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=rotate ops=7 gas_per_op=3565600 median_mint=11.055608ms empty_mint=675.373µs exec_per_op=1.48289ms median_commit=2.442848ms empty_commit=1.042431ms median_decode=1.071774ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-call ops=13 gas_per_op=1787600 median_mint=9.739861ms empty_mint=675.373µs exec_per_op=697.268µs median_commit=1.960631ms empty_commit=1.042431ms median_decode=1.02093ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-accept ops=7 gas_per_op=3565800 median_mint=10.2086ms empty_mint=675.373µs exec_per_op=1.361889ms median_commit=2.751351ms empty_commit=1.042431ms median_decode=1.063793ms
+--- PASS: TestBucketGuardBlockPerf (73.56s)
+PASS
+ok  	github.com/iotexproject/iotex-core/v2/e2etest	73.656s

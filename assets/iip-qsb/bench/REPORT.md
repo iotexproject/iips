@@ -26,6 +26,8 @@ Execution time per action in the full node path (`TestBucketGuardBlockPerf`):
 |---|---:|---:|---:|---:|
 | linux/amd64, AMD Ryzen 5 3600, SHA extensions | 0.70 ms | 1.21 ms | 0.66 ms | 1.14 ms |
 | linux/amd64, AMD Ryzen 5 3600, SHA extensions off | 1.29 ms | 2.53 ms | 1.24 ms | 2.34 ms |
+| linux/amd64, AMD EPYC 9V74 (GitHub runner, 4 vCPU), SHA extensions | 0.73 ms | 1.48 ms | 0.70 ms | 1.36 ms |
+| linux/arm64, Arm Neoverse-N2 (GitHub runner, 4 vCPU) | 0.65 ms | 1.11 ms | 0.60 ms | 1.13 ms |
 | darwin/arm64, Apple M1 Pro | 0.43 ms | 0.73 ms | 0.40 ms | 0.74 ms |
 
 Verification alone (`BenchmarkVerifyOp`, best of five runs of 200 iterations):
@@ -34,6 +36,9 @@ Verification alone (`BenchmarkVerifyOp`, best of five runs of 200 iterations):
 |---|---:|---:|
 | linux/amd64, AMD Ryzen 5 3600, SHA extensions | 0.51 ms | 1.05 ms |
 | linux/amd64, AMD Ryzen 5 3600, SHA extensions off | 1.11 ms | 2.26 ms |
+| linux/amd64, AMD EPYC 9V74 (GitHub runner), SHA extensions | 0.52 ms | 1.14 ms |
+| linux/amd64, AMD EPYC 9V74 (GitHub runner), SHA extensions off | 1.08 ms | 2.18 ms |
+| linux/arm64, Arm Neoverse-N2 (GitHub runner) | 0.45 ms | 0.89 ms |
 | darwin/arm64, Apple M1 Pro | 0.31 ms | 0.63 ms |
 | linux/arm64, VM on Apple M1 Pro | 0.33 ms | 0.67 ms |
 
@@ -73,9 +78,16 @@ action is charged about 1.79 M gas for about 1.3 ms of work, which is
 - **Gas at the time of the linux/amd64 block run.** That run used
   `G_VERIFY = 30,000`, so its blocks held 14 single-verification actions
   instead of 13. The time per action does not depend on the price.
-- **linux/arm64.** linux/arm64 was measured in a VM on Apple silicon (native
-  instructions, virtualised). It is faster than linux/amd64, so it does not
-  set `G_VERIFY`. A run on a native linux/arm64 server is still open.
+- **linux/arm64.** linux/arm64 was measured natively on a GitHub-hosted
+  `ubuntu-24.04-arm` runner (Arm Neoverse-N2, which has the Armv8 SHA2
+  instructions), and in a VM on Apple silicon. Both are faster than
+  linux/amd64 without SHA extensions, so linux/arm64 does not set `G_VERIFY`.
+  An arm64 core without the SHA2 instructions was not measured.
+- **GitHub-hosted runners.** They are shared, 4-vCPU virtual machines. The
+  runs used `qsb-bench.yml` in this directory, on the reference
+  implementation at iotex-core#5059 head `828f57a` plus the ACVP tests
+  (run 42837446143 of `envestcc/iotex-core`). Their figures agree with the
+  dedicated server's but are noisier.
 - **Emulation.** Emulated builds (for example, Rosetta 2) are not a
   calibration source.
 
@@ -90,5 +102,7 @@ benchmarks; the `-block` files are the `qsb-perf` lines of
 | `linux-amd64-ryzen5-3600-micro.txt`, `linux-amd64-ryzen5-3600-block.txt` | linux/amd64, AMD Ryzen 5 3600; sections `## sha-ni` and `## no-sha` |
 | `darwin-arm64-m1pro-micro.txt`, `darwin-arm64-m1pro-block.txt` | darwin/arm64, Apple M1 Pro |
 | `linux-arm64-vm-m1pro-micro.txt` | linux/arm64 VM on Apple M1 Pro |
+| `linux-arm64-neoverse-n2-gha-micro.txt`, `linux-arm64-neoverse-n2-gha-block.txt` | linux/arm64, Arm Neoverse-N2, GitHub-hosted runner |
+| `linux-amd64-epyc-9v74-gha-micro.txt`, `linux-amd64-epyc-9v74-gha-block.txt` | linux/amd64, AMD EPYC 9V74, GitHub-hosted runner; micro sections `## sha-ni` and `## no-sha` |
 
 All runs use Go 1.25.14.

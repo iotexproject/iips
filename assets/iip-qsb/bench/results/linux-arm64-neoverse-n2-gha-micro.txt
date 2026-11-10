@@ -1,0 +1,46 @@
+goos: linux
+goarch: arm64
+pkg: github.com/iotexproject/iotex-core/v2/action/protocol/staking/bucketguard
+BenchmarkVerifyOp/unstake/1-verify-4         	     200	    448725 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-4         	     200	    445396 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-4         	     200	    446758 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-4         	     200	    445213 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-4         	     200	    447242 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-4         	     200	    435349 ns/op	    9241 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-4         	     200	    434722 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-4         	     200	    434988 ns/op	    9241 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-4         	     200	    435136 ns/op	    9241 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-4         	     200	    435194 ns/op	    9241 B/op	      36 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-4          	     200	    889470 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-4          	     200	    886970 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-4          	     200	    886555 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-4          	     200	    886718 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-4          	     200	    886705 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-4        	     200	    910921 ns/op	   18493 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-4        	     200	    913892 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-4        	     200	    914722 ns/op	   18493 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-4        	     200	    916453 ns/op	   18493 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-4        	     200	    914635 ns/op	   18495 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-4         	     200	    873885 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-4         	     200	    878084 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-4         	     200	    874868 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-4         	     200	    873883 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-4         	     200	    874569 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkAuthorizeBind-4                                         	     200	    449995 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-4                                         	     200	    444854 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-4                                         	     200	    471050 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-4                                         	     200	    461108 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-4                                         	     200	    453767 ns/op	    9314 B/op	      36 allocs/op
+PASS
+ok  	github.com/iotexproject/iotex-core/v2/action/protocol/staking/bucketguard	14.474s
+goos: linux
+goarch: arm64
+pkg: github.com/iotexproject/iotex-core/v2/action
+BenchmarkGuardedBucketOpDecode/unstake-4         	    2000	     14503 ns/op	1122.43 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/unstake-4         	    2000	     12615 ns/op	1290.47 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/unstake-4         	    2000	     13325 ns/op	1221.66 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-4  	    2000	     35648 ns/op	 914.04 MB/s	  218344 B/op	      26 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-4  	    2000	     35082 ns/op	 928.81 MB/s	  218344 B/op	      26 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-4  	    2000	     37664 ns/op	 865.12 MB/s	  218344 B/op	      26 allocs/op
+PASS
+ok  	github.com/iotexproject/iotex-core/v2/action	2.534s
