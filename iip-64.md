@@ -17,7 +17,7 @@ Replaces: N/A
 
 ## Abstract
 
-This IoTeX Improvement Proposal (IIP) specifies a comprehensive, phased migration of the IoTeX blockchain from quantum-vulnerable elliptic-curve cryptography (secp256k1/ECDSA) to NIST-standardized post-quantum cryptographic (PQC) algorithms. The proposal draws on published research and migration frameworks from Ethereum, Bitcoin (BIP-361 and Chaincode Labs), Sui, the Quantum Resistant Ledger (QRL), Google Quantum AI, the Coinbase Independent Advisory Board, Meta, and Paradigm, synthesizing their findings into a specification tailored to IoTeX's Roll-DPoS consensus, 5-second block time, 24-delegate architecture, EVM compatibility, and DePIN ecosystem.
+This IoTeX Improvement Proposal (IIP) specifies a comprehensive, phased migration of the IoTeX blockchain from quantum-vulnerable elliptic-curve cryptography (secp256k1/ECDSA) to NIST-standardized post-quantum cryptographic (PQC) algorithms. The proposal draws on published research and migration frameworks from Ethereum, Bitcoin (BIP-361 and Chaincode Labs), Sui, the Quantum Resistant Ledger (QRL), Google Quantum AI, the Coinbase Independent Advisory Board, Meta, and Paradigm, synthesizing their findings into a specification tailored to IoTeX's Roll-DPoS consensus, 2.5-second block time, 24-delegate architecture, EVM compatibility, and DePIN ecosystem.
 
 The migration proceeds across five phases (2026–2033) and introduces: a PQ signature verification precompile; an EIP-2718-compatible PQ-authenticated transaction type; a PQ Key Registry; consensus-layer dual-signing with PQ checkpoint attestations; zkSTARK-based migration proofs for hidden-key accounts; a hash-hidden ("bunker") address strategy for accounts whose public keys are not yet exposed; the iPACT address-control timestamp scheme for pre-committed rescue; a five-level IoTeX PQC Maturity Model with on-chain metrics (§7); protocol guardrails that prevent new quantum-vulnerable deployments (§8); a quantum-milestone-triggered acceleration mechanism mapped to observable milestones (§9); and a cryptographic-agility framework with an explicit re-parameterization trigger (§4.11).
 
@@ -43,7 +43,7 @@ Following the taxonomy from [Google Quantum AI's whitepaper](https://quantumai.g
 
 * **At-Rest Attacks:** These attacks target accounts whose public keys are already exposed on-chain (i.e., any EOA that has ever signed a transaction). Since IoTeX addresses are derived from a Keccak-256 hash of the public key and the public key is recoverable from any signed transaction, the set of exposed accounts grows monotonically with network activity. A quantum adversary with a slow-clock CRQC (days of compute) can drain any such account.
 
-* **On-Spend Attacks:** These attacks target transactions in the mempool. Although IoTeX's 5-second block time is significantly shorter than Bitcoin's 10 minutes, it is still vulnerable to fast-clock CRQCs capable of solving ECDLP in minutes, particularly if the attacker has precomputed the "primed" state that can halve the attack time to ~9 minutes per Google's estimates. Moreover, delegate collusion or adversarial delegate replacement could extend the effective attack window.
+* **On-Spend Attacks:** These attacks target transactions in the mempool. Although IoTeX's 2.5-second block time is significantly shorter than Bitcoin's 10 minutes, it is still vulnerable to fast-clock CRQCs capable of solving ECDLP in minutes, particularly if the attacker has precomputed the "primed" state that can halve the attack time to ~9 minutes per Google's estimates. Moreover, delegate collusion or adversarial delegate replacement could extend the effective attack window.
 
 * **On-Setup Attacks:** These attacks target fixed public parameters. IoTeX's current protocol does not use trusted setups or pairing-based data availability sampling, making this vector less relevant at present. However, future integration with zk-rollup Layer-2 solutions or verifiable compute systems could introduce this risk.
 
@@ -96,7 +96,7 @@ This IIP considers the following three classes of quantum adversary, ordered by 
 
 * **Class 2: Offline CRQC.** An adversary with access to a CRQC but without real-time capability. This adversary can break any exposed secp256k1 public key given hours to days of quantum computation. All at-rest keys with prior on-chain exposure are vulnerable.
 
-* **Class 3: Real-Time CRQC.** An adversary with a CRQC capable of solving ECDLP-256 within the network's block confirmation window (5 seconds for IoTeX). Such an adversary can intercept transactions in the mempool, extract the signing key from the revealed public key, and broadcast a competing transaction before the original one is finalized. This is the most severe threat and the one that requires the network to have fully completed migration.
+* **Class 3: Real-Time CRQC.** An adversary with a CRQC capable of solving ECDLP-256 within the network's block confirmation window (2.5 seconds for IoTeX). Such an adversary can intercept transactions in the mempool, extract the signing key from the revealed public key, and broadcast a competing transaction before the original one is finalized. This is the most severe threat and the one that requires the network to have fully completed migration.
 
 ### 2.2 Two Timelines: T-governance and T-break
 
@@ -235,7 +235,7 @@ Meta's [engineering blog](https://engineering.fb.com/2026/04/16/security/post-qu
 ### 3.12 Key Insights for IoTeX
 
 * Ethereum's account-abstraction approach is directly applicable to IoTeX given EVM compatibility. IoTeX's Roll-DPoS consensus with 24 delegates is simpler than Ethereum's PoS, dramatically simplifying consensus-layer PQ migration.
-* IoTeX's 5-second block time makes on-spend attacks more challenging but not impossible (an attacker could collude with or replace delegates). The DePIN use case amplifies at-rest risk because device keys are long-lived. Google's dual-scenario planning framework directly informs the phased migration.
+* IoTeX's 2.5-second block time makes on-spend attacks more challenging but not impossible (an attacker could collude with or replace delegates). The DePIN use case amplifies at-rest risk because device keys are long-lived. Google's dual-scenario planning framework directly informs the phased migration.
 * IoTeX uses secp256k1/ECDSA, not EdDSA, so the seed-based DMS approach is not directly applicable. The mnemonic-based approach (proving knowledge of a BIP-39 mnemonic) remains viable for HD wallets following the IoTeX/pQCee construction. For non-mnemonic accounts (e.g., HSM-based institutional custody), the Kiraz–Kardas dual-path framework is more appropriate — subject to the T-break caveat in §3.5.
 * The dual-path approach of Kiraz and Kardas is directly applicable: IoTeX accounts that have transacted (revealed keys) follow Scenario A; accounts that have only received (hidden keys) follow Scenario B. The Ethereum-specific STARK circuit design can be adopted with minimal modification for IoTeX's Keccak-256 address derivation.
 * The "private incentive" model in BIP-361 (a clear deadline to motivate migration) is applicable to IoTeX but must be calibrated to IoTeX's governance model (24 delegates, community voting) and the DePIN device lifecycle.
@@ -536,10 +536,10 @@ IoTeX's Roll-DPoS consensus with 24 delegates simplifies consensus PQ migration 
 
 Revision 3 made a hash-based scheme the consensus default; **Revision 7 requires a cross-family hybrid (hash + lattice) for consensus keys (§4.1.4), so that a break of either family alone cannot compromise a delegate key.** The lattice half (ML-DSA-87) is therefore a *required component* of the hybrid, not a fallback.
 
-**Signing frequency and the stateful-signature hazard (must be engineered, not assumed).** A common assumption — "signed once per epoch, like Ethereum's lean design" — does **not** hold for IoTeX. At a 5-second block time a single delegate may sign on the order of 17,280 times per day (≈ 6.3 million per year). This has two consequences:
+**Signing frequency and the stateful-signature hazard (must be engineered, not assumed).** A common assumption — "signed once per epoch, like Ethereum's lean design" — does **not** hold for IoTeX. At a 2.5-second block time a single delegate may sign on the order of 34,560 times per day (≈ 12.6 million per year). This has two consequences:
 
 * **Stateless (SLH-DSA):** no state hazard, but each signature is 16,224 B at SLH-DSA-SHA2-192s (§4.1.3). This makes per-block bandwidth the binding constraint (see below), and motivates aggregation.
-* **Stateful (XMSS / leanXMSS):** signatures are far smaller (on the order of 2–3 KiB for typical parameters; to be confirmed against the final leanSig specification), but **reusing a one-time-signature index is catastrophic** — it discloses the private key. A stateful consensus scheme MUST therefore (a) size its hypertree (h) for years of 5-second signing, (b) hold the monotonic index inside an HSM/secure element, and (c) define an explicit disaster-recovery procedure that forbids signing from a rolled-back state. These requirements MUST be validated before any stateful scheme is activated.
+* **Stateful (XMSS / leanXMSS):** signatures are far smaller (on the order of 2–3 KiB for typical parameters; to be confirmed against the final leanSig specification), but **reusing a one-time-signature index is catastrophic** — it discloses the private key. A stateful consensus scheme MUST therefore (a) size its hypertree (h) for years of 2.5-second signing, (b) hold the monotonic index inside an HSM/secure element, and (c) define an explicit disaster-recovery procedure that forbids signing from a rolled-back state. These requirements MUST be validated before any stateful scheme is activated.
 
 **Scheme selection (REQUIRED — cross-family hybrid).** Delegate/consensus keys MUST use a **cross-family hybrid (lattice + hash)** (§4.1.4): every proposal and attestation MUST carry **both** a lattice signature (ML-DSA-87) and a hash-based signature (SLH-DSA-192s, or an audited XMSS/leanXMSS with the state-management controls above), and **both MUST verify** for the attestation to be accepted. The hash-based half is stateless (SLH-DSA) by default, or stateful (XMSS) where the state controls can be guaranteed.
 
@@ -551,15 +551,15 @@ Revision 3 made a hash-based scheme the consensus default; **Revision 7 requires
 
 ```
 Scheme                    per-block (24 delegates)   per-day        per-year
-ML-DSA-87                 111,048 B  (108 KiB)       1.92 GB/day    ~700 GB/yr
-SLH-DSA-SHA2-192s         389,376 B  (380 KiB)       6.73 GB/day    ~2.46 TB/yr
-XMSS/leanXMSS (~2.5 KiB, ESTIMATE)  ~60,000 B (est.)  (~59 KiB)  ~1.04 GB/day  ~380 GB/yr
-Hybrid (ML-DSA-87 + SLH-DSA-192s) 500,424 B (488.7 KiB) 8.647 GB/day 3.156 TB/yr
+ML-DSA-87                 111,048 B  (108 KiB)       3.84 GB/day    ~1.40 TB/yr
+SLH-DSA-SHA2-192s         389,376 B  (380 KiB)       13.46 GB/day   ~4.91 TB/yr
+XMSS/leanXMSS (~2.5 KiB, ESTIMATE)  ~60,000 B (est.)  (~59 KiB)  ~2.07 GB/day  ~757 GB/yr
+Hybrid (ML-DSA-87 + SLH-DSA-192s) 500,424 B (488.7 KiB) 17.295 GB/day 6.313 TB/yr
 ```
 
 Direct verification of both signature components is the baseline acceptance rule. Signature aggregation MAY be enabled only under §4.7.1. PQ migration MUST NOT depend on an unreviewed aggregation design. An unaggregated deployment still requires measured evidence that block propagation, verification, storage, and consensus timing remain within approved limits; otherwise the affected activation MUST be deferred or its resource parameters explicitly revised.
 
-> **Illustrative hybrid cost, corrected in Revision 8.** ML-DSA-87 (4,627 B) + SLH-DSA-192s (16,224 B) = 20,851 signature bytes per signer. Assuming exactly 24 such signature pairs per block and a 5-second block interval: 500,424 B/block, 8,647,326,720 B/day, and 3,156,274,252,800 B per 365-day year. This is approximately 28.5% more signature bytes than SLH-DSA-192s alone, not a doubling. These are scenario calculations, not measured protocol traffic: they exclude keys, framing, additional consensus messages, retransmission, and failed rounds. Actual signer counts, block interval, and messages per round MUST be pinned to the target release in §6.5 before activation.
+> **Illustrative hybrid cost, corrected in Revision 8.** ML-DSA-87 (4,627 B) + SLH-DSA-192s (16,224 B) = 20,851 signature bytes per signer. Assuming exactly 24 such signature pairs per block and a 2.5-second block interval: 500,424 B/block, 17,294,653,440 B/day, and 6,312,548,505,600 B per 365-day year. This is approximately 28.5% more signature bytes than SLH-DSA-192s alone, not a doubling. These are scenario calculations, not measured protocol traffic: they exclude keys, framing, additional consensus messages, retransmission, and failed rounds. Actual signer counts, block interval, and messages per round MUST be pinned to the target release in §6.5 before activation.
 
 > **Native verification is necessary but not sufficient.** Consensus aggregation MUST NOT use a pairing-based proof wrapper as its authorization boundary. Native STARK verification removes that wrapper dependency, but does not by itself establish quantum soundness, circuit correctness, or implementation security. The additional requirements in §4.7.1 apply independently of the migration-contract verifier choices in §4.9.
 
@@ -1052,7 +1052,7 @@ For fixed authenticated key bundles, an identical domain-separated message, and 
 
 ### 13.2 Block Size and Throughput Impact
 
-At IoTeX's current parameters, transaction-size growth reduces transactions per block substantially if block-size limits are unchanged. Mitigations: increase the block-size limit (straightforward given the 5-second block time and delegate consensus); introduce blob-style data availability for PQ signature data (EIP-4844-style); and implement STARK-based signature aggregation in later phases. Consensus-attestation bandwidth and storage are quantified for each candidate scheme in §4.7 (~380 GB/yr for a stateful hash scheme, ~700 GB/yr for ML-DSA-87, ~2.46 TB/yr for SLH-DSA-192s).
+At IoTeX's current parameters, transaction-size growth reduces transactions per block substantially if block-size limits are unchanged. Mitigations: increase the block-size limit (straightforward given the 2.5-second block time and delegate consensus); introduce blob-style data availability for PQ signature data (EIP-4844-style); and implement STARK-based signature aggregation in later phases. Consensus-attestation bandwidth and storage are quantified for each candidate scheme in §4.7 (~757 GB/yr for a stateful hash scheme, ~1.40 TB/yr for ML-DSA-87, ~4.91 TB/yr for SLH-DSA-192s).
 
 ### 13.3 Gas Cost Comparison
 
@@ -1144,7 +1144,7 @@ To be developed as open-source public goods (repository links MUST be added here
 
 ## 18. Open Questions
 
-1. **Consensus hash scheme:** SLH-DSA-192s (stateless, heavier) or XMSS/leanXMSS (smaller, stateful) as the Phase-1 consensus default for IoTeX's 5-second signing frequency? (§4.7)
+1. **Consensus hash scheme:** SLH-DSA-192s (stateless, heavier) or XMSS/leanXMSS (smaller, stateful) as the Phase-1 consensus default for IoTeX's 2.5-second signing frequency? (§4.7)
 2. **Security-level floor:** is Category 3 the right floor, or should consensus/admin use Category 5 exclusively and user keys stay Category 2 for size? (§4.1.1)
 3. **iPACT cutoff timing:** what is the earliest block at which commitments can be reliably timestamped on both Bitcoin (OpenTimestamps) and IoTeX? (§4.10.3)
 4. **Post-break rescue at scale:** if T-break arrives before mass iPACT commitment, what (if anything) should happen to un-migrated exposed accounts? (§14)
@@ -1222,7 +1222,7 @@ Hardening pass following an expert review and fact-check of Revision 3.
 Incorporates the external technical review of Revision 2.
 
 **Consensus and threat model**
-20. **Consensus is now hash-based-first** (§4.7): SLH-DSA-192s or a stateful XMSS/leanXMSS construction is the primary delegate scheme; ML-DSA-87 is demoted to fallback. Added the 5-second signing-frequency analysis and the stateful-signature state-reuse hazard, with mandatory HSM state management and disaster-recovery controls.
+20. **Consensus is now hash-based-first** (§4.7): SLH-DSA-192s or a stateful XMSS/leanXMSS construction is the primary delegate scheme; ML-DSA-87 is demoted to fallback. Added the 2.5-second signing-frequency analysis and the stateful-signature state-reuse hazard, with mandatory HSM state management and disaster-recovery controls.
 21. **Added non-quantum triggers** (new §9.2, C1–C4) for classical/AI-accelerated cryptanalysis, and made the §6.2 emergency track activate on either axis. Graded the §4.11 response deadline (90 days for gradual; 7/30 days for structural events).
 22. **Revised the §4.11 substitution policy:** for high-value keys (consensus, admin, bridges/ioTube), a structural break triggers a direct assumption-family replacement to hash-based signatures rather than parameter inflation; parameter-first remains for gradual weakening and for user keys.
 
