@@ -1,0 +1,72 @@
+## sha-ni
+ 08:21:39 up 6 days,  5:08,  0 user,  load average: 0.93, 0.81, 1.17
+exit=0
+    bucket_guard_perf_test.go:153: qsb-perf setup block_gas_limit=25000000 one_verify_ops=14 two_verify_ops=7 rounds=5 cpus=12
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=11 ops=0 gas=0 bytes=727 mint=635.156µs commit=12.908172ms decode=17.31µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=12 ops=14 gas=23343600 bytes=230991 mint=10.125696ms commit=21.28015ms decode=1.09465ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=13 ops=7 gas=23279200 bytes=229857 mint=8.827073ms commit=29.718151ms decode=846.208µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=14 ops=14 gas=23346400 bytes=231019 mint=12.499417ms commit=22.092579ms decode=1.190812ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=15 ops=7 gas=23280600 bytes=229871 mint=8.759563ms commit=29.964332ms decode=1.02289ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=16 ops=0 gas=0 bytes=727 mint=731.537µs commit=26.306138ms decode=18.091µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=17 ops=14 gas=23343600 bytes=230991 mint=10.656201ms commit=21.578033ms decode=1.188091ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=18 ops=7 gas=23280600 bytes=229871 mint=8.741372ms commit=13.615759ms decode=1.141571ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=19 ops=14 gas=23346400 bytes=231019 mint=9.941703ms commit=25.843604ms decode=1.06457ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=20 ops=7 gas=23280600 bytes=229871 mint=9.086835ms commit=22.514962ms decode=1.804497ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=21 ops=0 gas=0 bytes=727 mint=814.358µs commit=8.790683ms decode=18.65µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=22 ops=14 gas=23343600 bytes=230991 mint=10.353368ms commit=25.391839ms decode=733.886µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=23 ops=7 gas=23280600 bytes=229871 mint=9.273397ms commit=17.358534ms decode=1.05119ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=24 ops=14 gas=23346400 bytes=231019 mint=9.457409ms commit=17.658916ms decode=850.638µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=25 ops=7 gas=23280600 bytes=229871 mint=8.968305ms commit=9.313398ms decode=1.02571ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=26 ops=0 gas=0 bytes=727 mint=751.197µs commit=8.57236ms decode=19.4µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=27 ops=14 gas=23343600 bytes=231004 mint=10.603179ms commit=9.984695ms decode=752.447µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=28 ops=7 gas=23280600 bytes=229878 mint=9.219227ms commit=17.98356ms decode=1.04515ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=29 ops=14 gas=23346400 bytes=231033 mint=9.50562ms commit=16.961309ms decode=1.399324ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=30 ops=7 gas=23280600 bytes=229878 mint=8.638771ms commit=17.278613ms decode=792.628µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=31 ops=0 gas=0 bytes=727 mint=1.03193ms commit=8.058236ms decode=18.26µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=32 ops=14 gas=23343600 bytes=231005 mint=14.79008ms commit=56.250929ms decode=913.689µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=33 ops=7 gas=23280600 bytes=229878 mint=9.335048ms commit=9.195147ms decode=785.357µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=34 ops=14 gas=23346400 bytes=231033 mint=10.059765ms commit=15.270414ms decode=859.238µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=35 ops=7 gas=23280600 bytes=229878 mint=8.641361ms commit=26.813733ms decode=844.828µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=unstake ops=14 gas_per_op=1667400 median_mint=10.603179ms empty_mint=751.197µs exec_per_op=703.713µs median_commit=21.578033ms empty_commit=8.790683ms median_decode=913.689µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=rotate ops=7 gas_per_op=3325600 median_mint=9.219227ms empty_mint=751.197µs exec_per_op=1.209718ms median_commit=17.358534ms empty_commit=8.790683ms median_decode=1.04515ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-call ops=14 gas_per_op=1667600 median_mint=9.941703ms empty_mint=751.197µs exec_per_op=656.464µs median_commit=17.658916ms empty_commit=8.790683ms median_decode=1.06457ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-accept ops=7 gas_per_op=3325800 median_mint=8.759563ms empty_mint=751.197µs exec_per_op=1.144052ms median_commit=22.514962ms empty_commit=8.790683ms median_decode=1.02289ms
+--- PASS: TestBucketGuardBlockPerf (34.68s)
+PASS
+## no-sha
+ 08:22:14 up 6 days,  5:09,  0 user,  load average: 5.10, 1.89, 1.52
+exit=0
+    bucket_guard_perf_test.go:153: qsb-perf setup block_gas_limit=25000000 one_verify_ops=14 two_verify_ops=7 rounds=5 cpus=12
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=11 ops=0 gas=0 bytes=728 mint=965.37µs commit=13.270194ms decode=16.18µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=12 ops=14 gas=23343600 bytes=230992 mint=19.386972ms commit=21.019178ms decode=743.277µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=13 ops=7 gas=23279200 bytes=229858 mint=17.450575ms commit=21.211879ms decode=998.68µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=14 ops=14 gas=23346400 bytes=231020 mint=18.455015ms commit=30.018942ms decode=1.0543ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=15 ops=7 gas=23280600 bytes=229872 mint=17.195532ms commit=13.815ms decode=938.859µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=16 ops=0 gas=0 bytes=728 mint=732.507µs commit=20.926156ms decode=20.32µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=17 ops=14 gas=23343600 bytes=230992 mint=19.143449ms commit=29.921072ms decode=1.08441ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=18 ops=7 gas=23280600 bytes=229872 mint=18.523505ms commit=21.984196ms decode=1.12428ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=19 ops=14 gas=23346400 bytes=231020 mint=18.288912ms commit=25.433318ms decode=811.188µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=20 ops=7 gas=23280600 bytes=229872 mint=17.564564ms commit=21.737065ms decode=1.04962ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=21 ops=0 gas=0 bytes=728 mint=767.157µs commit=8.62011ms decode=16.42µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=22 ops=14 gas=23343600 bytes=230992 mint=18.655406ms commit=25.528399ms decode=754.667µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=23 ops=7 gas=23280600 bytes=229872 mint=19.181221ms commit=10.049744ms decode=1.068401ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=24 ops=14 gas=23346400 bytes=231020 mint=17.779097ms commit=25.739622ms decode=1.0471ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=25 ops=7 gas=23280600 bytes=229872 mint=28.618199ms commit=17.605795ms decode=807.368µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=26 ops=0 gas=0 bytes=728 mint=1.10436ms commit=10.429447ms decode=28.96µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=27 ops=14 gas=23343600 bytes=231005 mint=18.835077ms commit=25.54073ms decode=750.137µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=28 ops=7 gas=23280600 bytes=229879 mint=22.051008ms commit=9.832142ms decode=1.07236ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=29 ops=14 gas=23346400 bytes=231034 mint=18.175231ms commit=25.862383ms decode=839.218µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=30 ops=7 gas=23280600 bytes=229879 mint=17.141462ms commit=28.060353ms decode=1.0656ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=empty height=31 ops=0 gas=0 bytes=728 mint=824.378µs commit=8.383268ms decode=20.231µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=unstake height=32 ops=14 gas=23343600 bytes=231006 mint=18.877608ms commit=42.704431ms decode=723.527µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=rotate height=33 ops=7 gas=23280600 bytes=229879 mint=17.238062ms commit=22.3025ms decode=1.04452ms
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-call height=34 ops=14 gas=23346400 bytes=231033 mint=17.777187ms commit=25.738742ms decode=803.708µs
+    bucket_guard_perf_test.go:220: qsb-perf scenario=bad-accept height=35 ops=7 gas=23280600 bytes=229879 mint=16.956519ms commit=33.510885ms decode=833.807µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=unstake ops=14 gas_per_op=1667400 median_mint=18.877608ms empty_mint=824.378µs exec_per_op=1.289516ms median_commit=25.54073ms empty_commit=10.429447ms median_decode=750.137µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=rotate ops=7 gas_per_op=3325600 median_mint=18.523505ms empty_mint=824.378µs exec_per_op=2.528446ms median_commit=21.211879ms empty_commit=10.429447ms median_decode=1.068401ms
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-call ops=14 gas_per_op=1667600 median_mint=18.175231ms empty_mint=824.378µs exec_per_op=1.239346ms median_commit=25.739622ms empty_commit=10.429447ms median_decode=839.218µs
+    bucket_guard_perf_test.go:296: qsb-perf summary scenario=bad-accept ops=7 gas_per_op=3325800 median_mint=17.195532ms empty_mint=824.378µs exec_per_op=2.338736ms median_commit=21.737065ms empty_commit=10.429447ms median_decode=938.859µs
+--- PASS: TestBucketGuardBlockPerf (90.26s)
+PASS
+ 08:23:44 up 6 days,  5:10,  0 user,  load average: 9.30, 4.36, 2.45
+cleaned

@@ -1,0 +1,67 @@
+ 03:37:32 up 6 days, 24 min,  0 user,  load average: 1.76, 2.58, 3.18
+## sha-ni GODEBUG=
+cpu: AMD Ryzen 5 3600 6-Core Processor              
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	    521425 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	    508928 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	    511558 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	    508163 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	    652409 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	    504357 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	    649324 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	    662735 ns/op	    9243 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	    608586 ns/op	    9246 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	    504630 ns/op	    9243 B/op	      36 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   1053640 ns/op	   18480 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   1279071 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   1299642 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   1245646 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   1182906 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   1079747 ns/op	   18503 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   1037409 ns/op	   18505 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   1113418 ns/op	   18503 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   1118138 ns/op	   18502 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   1152284 ns/op	   18505 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   1082044 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	    997121 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	    994545 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   1171102 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   1143274 ns/op	   18493 B/op	      70 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	    499810 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	    564747 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	    499203 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	    521565 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	    501225 ns/op	    9314 B/op	      36 allocs/op
+## no-sha GODEBUG=cpu.sha=off
+GODEBUG sys/cpu: unknown cpu feature "sha"
+cpu: AMD Ryzen 5 3600 6-Core Processor              
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	   1109201 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	   1106309 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	   1105767 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	   1193989 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-12         	     200	   1149890 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	   1098674 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	   1263307 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	   1259793 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	   1229596 ns/op	    9246 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-12         	     200	   1170307 ns/op	    9246 B/op	      36 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   2299666 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   2260973 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   2365468 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   2466699 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-12          	     200	   2554901 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   2372003 ns/op	   18505 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   2400656 ns/op	   18506 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   2253587 ns/op	   18505 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   2368336 ns/op	   18533 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-12        	     200	   2473071 ns/op	   18506 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   2195654 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   2162151 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   2208862 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   2430581 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-12         	     200	   2389853 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	   1124216 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	   1113889 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	   1130175 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	   1156357 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-12                                         	     200	   1116300 ns/op	    9314 B/op	      36 allocs/op
+ 03:38:26 up 6 days, 25 min,  0 user,  load average: 2.11, 2.57, 3.14

@@ -1,0 +1,32 @@
+5
+aarch64
+BenchmarkVerifyOp/unstake/1-verify-5         	     200	    333384 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-5         	     200	    334418 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-5         	     200	    422008 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-5         	     200	    424082 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-5         	     200	    337864 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-5         	     200	    324246 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-5         	     200	    337109 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-5         	     200	    326265 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-5         	     200	    363045 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-5         	     200	    369687 ns/op	    9239 B/op	      36 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-5          	     200	    774691 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-5          	     200	    665032 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-5          	     200	   2525615 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-5          	     200	    892507 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-5          	     200	    687293 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-5        	     200	    678791 ns/op	   18495 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-5        	     200	    671994 ns/op	   18495 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-5        	     200	    739706 ns/op	   18495 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-5        	     200	    755269 ns/op	   18495 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-5        	     200	    671008 ns/op	   18494 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-5         	     200	    660556 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-5         	     200	    697815 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-5         	     200	    692521 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-5         	     200	    658189 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-5         	     200	    665138 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkAuthorizeBind-5                                         	     200	    330920 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-5                                         	     200	    316893 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-5                                         	     200	    373585 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-5                                         	     200	    340136 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-5                                         	     200	    379385 ns/op	    9314 B/op	      36 allocs/op

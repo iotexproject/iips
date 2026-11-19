@@ -1,0 +1,50 @@
+# IIP-65 §8 full-handler benchmarks for G_VERIFY on GitHub-hosted runners.
+# Temporary: runs on pushes to this branch of a fork only.
+name: qsb-bench
+
+on:
+  push:
+    branches: [qsb/arm64-bench]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Platform
+        run: |
+          uname -m
+          lscpu | grep -E 'Model name|Vendor ID|^CPU\(s\)|Flags' | cut -c1-200
+          grep -o -w -E 'sha_ni|sha2|sha1|avx2' /proc/cpuinfo | sort | uniq -c || true
+          go version
+      - name: Verification benchmarks
+        run: |
+          go test -tags nosilkworm -run '^$' -bench . -benchtime 200x -count 5 ./action/protocol/staking/bucketguard/ | tee micro.txt
+          go test -tags nosilkworm -run '^$' -bench GuardedBucketOpDecode -benchtime 2000x -count 3 ./action/ | tee -a micro.txt
+      - name: Verification benchmarks without SHA extensions
+        if: runner.arch == 'X64'
+        env:
+          GODEBUG: cpu.sha=off
+        run: |
+          go test -tags nosilkworm -run '^$' -bench . -benchtime 200x -count 5 ./action/protocol/staking/bucketguard/ | tee micro-nosha.txt
+      - name: Full-block benchmark
+        env:
+          QSB_PERF: "1"
+          QSB_PERF_ROUNDS: "5"
+        run: |
+          go test -tags nosilkworm -run TestBucketGuardBlockPerf -v -count 1 -timeout 50m ./e2etest/ 2>&1 | grep -E 'qsb-perf|^(--- |ok|FAIL|PASS)' | tee block.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsb-bench-${{ runner.arch }}
+          path: '*.txt'

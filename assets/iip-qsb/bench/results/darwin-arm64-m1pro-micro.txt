@@ -1,0 +1,37 @@
+cpu: Apple M1 Pro
+BenchmarkVerifyOp/unstake/1-verify-10         	     200	    322385 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-10         	     200	    322882 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-10         	     200	    310109 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-10         	     200	    315214 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/1-verify-10         	     200	    317150 ns/op	    9202 B/op	      35 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-10         	     200	    305918 ns/op	    9243 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-10         	     200	    368781 ns/op	    9242 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-10         	     200	    327416 ns/op	    9243 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-10         	     200	    311860 ns/op	    9242 B/op	      36 allocs/op
+BenchmarkVerifyOp/unstake/bad-call-10         	     200	    311453 ns/op	    9244 B/op	      36 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-10          	     200	    630909 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-10          	     200	    626528 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-10          	     200	    640576 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-10          	     200	    639779 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/2-verify-10          	     200	    628658 ns/op	   18452 B/op	      69 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-10        	     200	    618186 ns/op	   18503 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-10        	     200	    628980 ns/op	   18501 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-10        	     200	    619384 ns/op	   18501 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-10        	     200	    622874 ns/op	   18501 B/op	      70 allocs/op
+BenchmarkVerifyOp/rotate/bad-accept-10        	     200	    625953 ns/op	   18500 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-10         	     200	    598804 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-10         	     200	    611725 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-10         	     200	    612617 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-10         	     200	    609991 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkVerifyOp/transfer-new-guard/2-verify-max-size-10         	     200	    604024 ns/op	   18492 B/op	      70 allocs/op
+BenchmarkAuthorizeBind-10                                         	     200	    318156 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-10                                         	     200	    323720 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-10                                         	     200	    320518 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-10                                         	     200	    317809 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkAuthorizeBind-10                                         	     200	    312413 ns/op	    9314 B/op	      36 allocs/op
+BenchmarkGuardedBucketOpDecode/unstake-10         	    2000	     10284 ns/op	1582.89 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/unstake-10         	    2000	      9582 ns/op	1698.92 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/unstake-10         	    2000	      9718 ns/op	1675.06 MB/s	   70440 B/op	      10 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-10  	    2000	     27824 ns/op	1171.09 MB/s	  218344 B/op	      26 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-10  	    2000	     28344 ns/op	1149.58 MB/s	  218345 B/op	      26 allocs/op
+BenchmarkGuardedBucketOpDecode/transfer+guard-10  	    2000	     25597 ns/op	1272.97 MB/s	  218347 B/op	      26 allocs/op

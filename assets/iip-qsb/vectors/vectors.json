@@ -1,0 +1,165 @@
+{
+  "iip": 65,
+  "parameters": {
+    "G_BASE": 10000,
+    "G_BYTE": 100,
+    "G_VERIFY": 150000
+  },
+  "qsbDomain": {
+    "mainnet": {
+      "chainID": 1,
+      "genesisHash": "b337983730981c2d50f114eed5da9dd20b83c8c5e130beefdb3001dc858cfe8b",
+      "qsbDomain": "49d87941a7e817ba842f0f3ec9252840a56d0d090ec50f1d6938fc8a82bed871"
+    },
+    "testnet": {
+      "chainID": 2,
+      "genesisHash": "5e31a9f95ca4de82bd6f5ed9b465c6474bba27f1c5d31747393a555ce1f41607",
+      "qsbDomain": "5f917f80a9bc0a0ed98df4b02f74ebe111f8289f4e467a92e48fb3a2ae9f997d"
+    }
+  },
+  "transcripts": {
+    "inputs": "mainnet qsbDomain; owner 0x11 x 20; anchor block 1000 with hash 0x33 x 32",
+    "callUnstake": {
+      "inputs": "bucket 1, generation 1, nonce 0, deadline 1010, op UNSTAKE, no sponsor",
+      "call": "49d87941a7e817ba842f0f3ec9252840a56d0d090ec50f1d6938fc8a82bed871000000000000000111111111111111111111111111111111111111110000000000000001000000000000000000000000000003f200000000000003e8333333333333333333333333333333333333333333333333333333333333333300000001000000000000000000000000000000000000000000000000000000"
+    },
+    "acceptBind": {
+      "inputs": "bucket 1, new generation 1, algID 0x12, publicKey below, callHash 64 zero bytes",
+      "publicKey": "c3530472b05ab2c631028bf08d7fa740f87ccbe26c8290b286f8317dbc30787febe5366d8be38345ec93d0fca288459a",
+      "accept": "49d87941a7e817ba842f0f3ec9252840a56d0d090ec50f1d6938fc8a82bed8710000000000000001000000000000000111111111111111111111111111111111111111110000001200000030c3530472b05ab2c631028bf08d7fa740f87ccbe26c8290b286f8317dbc30787febe5366d8be38345ec93d0fca288459a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "rotate": {
+      "inputs": "bucket 1, generation 1, nonce 2, deadline 1010, incoming key publicKey above, sponsor 0x22 x 20",
+      "callHashSha512": "f098e3c9f256a7293c8f1e3c155d16011c9b74286435a9c015803f9c5221e0dd7b3c6a31032eba2a1ccc471a4e708e90af5349b6c829381765350cf93aae51bd",
+      "acceptSha256": "98ace1e9e138f66d6beab41858ef6e20f69e28f1ab9e0417ba5170e87241167c",
+      "guardKeyID": "5822fceae8513928ac3b49fc3f87696a3ec93bcaf812bcdcf43d83b750dbe653"
+    }
+  },
+  "canonicalSize": {
+    "inputs": "48-byte zero public key, 16,224-byte zero signature, bucket 1, generation 1, nonce 0, deadline 1010, anchor block 1000 with hash 0x33 x 32, 0x44 x 20 for recipient, newOwner and expectedCandidateID; sha256 is over C(m)",
+    "cases": [
+      {
+        "name": "BindBucketGuard",
+        "size": 16281,
+        "verifications": 1,
+        "intrinsicGas": 1788100,
+        "sha256": "e39fec5a6a1739ff165ab0c0ffe59878fcec475778da8bdddd08f4e4aad09ce4"
+      },
+      {
+        "name": "UNSTAKE",
+        "size": 16275,
+        "verifications": 1,
+        "intrinsicGas": 1787500,
+        "sha256": "5e036b59d04be808968a4831c5eff1259959c7e42889fa4b66050055d06bf1ee"
+      },
+      {
+        "name": "WITHDRAW",
+        "size": 16297,
+        "verifications": 1,
+        "intrinsicGas": 1789700,
+        "sha256": "a29d9725e9d92e65752889227036b86bc66944060b75fc3e86efecd7083f179d"
+      },
+      {
+        "name": "TRANSFER + clearGuard",
+        "size": 16299,
+        "verifications": 1,
+        "intrinsicGas": 1789900,
+        "sha256": "d7aa8801752cb5f8bb2042781c1fd4409f2f1b597f114e57eccbbc31df4cad93"
+      },
+      {
+        "name": "CHANGE_CANDIDATE (delegateab)",
+        "size": 16309,
+        "verifications": 1,
+        "intrinsicGas": 1790900,
+        "sha256": "8c8fd5613a39f05403f804add7068d30db525c7837adfe89419268c9fc37e726"
+      },
+      {
+        "name": "RESTAKE (7 days, autoStake)",
+        "size": 16279,
+        "verifications": 1,
+        "intrinsicGas": 1787900,
+        "sha256": "9c869032738758f64a7ab884a436174d3bbad40daf75c960d286c624f1d50783"
+      },
+      {
+        "name": "ROTATE",
+        "size": 32557,
+        "verifications": 2,
+        "intrinsicGas": 3565700,
+        "sha256": "e7836c0e0df88bf9f6348a1d2840f9055a9383358ae4273647f814fef0b5ec17"
+      },
+      {
+        "name": "TRANSFER + newGuard",
+        "size": 32579,
+        "verifications": 2,
+        "intrinsicGas": 3567900,
+        "sha256": "d831db5b5e2d3038ca27ddd3cccda2476e3d0a239eba9142a90808359e5170e3"
+      },
+      {
+        "name": "UNSTAKE + sponsor",
+        "size": 16297,
+        "verifications": 1,
+        "intrinsicGas": 1789700,
+        "sha256": "2d14d32b020768b6a3e273e10a57fbbe16cb6e9c7b8ffc5ec09705440dbb64d5"
+      },
+      {
+        "name": "UNSTAKE, anchorHeight = 2^28",
+        "size": 16278,
+        "verifications": 1,
+        "intrinsicGas": 1787800,
+        "sha256": "e34256c46d6ea409dd0c815faf38c9f1c5cd7e902c870d717fb4abb79455c19d"
+      },
+      {
+        "name": "ROTATE with an empty newGuard (invalid; size only)",
+        "size": 16277,
+        "verifications": 2,
+        "intrinsicGas": 1937700,
+        "sha256": "2565c01dd96ee1fad524b7bd9c0aa07d7eb346b73b2519861ecd4db7374b6d9a"
+      }
+    ]
+  },
+  "kdf": {
+    "testSeed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "seedCases": [
+      {
+        "vaultIndex": 0,
+        "keyIndex": 0,
+        "okm": "c5846824b81db2e3ac1bccb6044310f35a47e5b697aab627a8aaf2e88d27c9da3a819650779aff30b653ac27236d5d4a19cefae20e485beb73cd3baf3c84b9e452018c51850faac1",
+        "publicKey": "19cefae20e485beb73cd3baf3c84b9e452018c51850faac1e419836bc96f267a5913d095b8d796eecf68f4ca43eed03f"
+      },
+      {
+        "vaultIndex": 3,
+        "keyIndex": 2,
+        "okm": "f89578d51bdd62faab28ec2327275708165db4edadb615931dd6386c547ae400be65661f1f6f8941c2912dab72afce534384023dc938bad1b2397fe831a94bd6215e8cfad1c7a207",
+        "publicKey": "4384023dc938bad1b2397fe831a94bd6215e8cfad1c7a2074147d24e68cc0c0f9f13216c66e524af9d77972dcf6e87c5"
+      },
+      {
+        "vaultIndex": 0,
+        "keyIndex": 1024,
+        "okm": "8a480e5bad2e75dea2ca02d216ba11478209bce0cd80c642e0fcc45f72eaa83df5695282c9148417146a48fca9652b47953096e87852f078eb9e759930ffe901aa1d956c6275d3d5",
+        "publicKey": "953096e87852f078eb9e759930ffe901aa1d956c6275d3d5feaf66e629287fb976157c6263dbd4350a4263f9acc3311b"
+      },
+      {
+        "vaultIndex": 0,
+        "keyIndex": 4294967295,
+        "okm": "c91f5899055d18790e5ea69bd6732a5cf83b57ef8f6c1cd899d82d23717b6a27e38306f3779641221f996c963294bc73758637538cc8ae78652d57d9b200c86bafb63c3735574f37",
+        "publicKey": "758637538cc8ae78652d57d9b200c86bafb63c3735574f3713ab8d545e03293a93d9a9af340663f38d05211234002e31"
+      }
+    ],
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+    "mnemonicCases": [
+      {
+        "passphrase": "",
+        "bip39Seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+        "okm": "fbb67bf81b6cfbe89b8d03f293068b8b6f7b9c4036bb3a1f832ba361377f955e9a0618b489ac50b900ce6417ec10a29eb06841df29502ec67c3160c530f7b7d26e0a76838cced6e7",
+        "publicKey": "b06841df29502ec67c3160c530f7b7d26e0a76838cced6e77b545a16fb3d435ce5bac69926bc389a83d32a7c6f2876ee"
+      },
+      {
+        "passphrase": "TREZOR",
+        "bip39Seed": "bda85446c68413707090a52022edd26a1c9462295029f2e60cd7c4f2bbd3097170af7a4d73245cafa9c3cca8d561a7c3de6f5d4a10be8ed2a5e608d68f92fcc8",
+        "okm": "7831b06300574c17e6efff46d5a9ba2a8998dc95e89e816cde838f2d7e524b2c5b79cf5deb880a964da9a232bae15cf634fbd17dc298c306ca1d49a7cc9624a201bb7e132434b190",
+        "publicKey": "34fbd17dc298c306ca1d49a7cc9624a201bb7e132434b190201d121d4fbd886a422c45c509e0d143edb350a1e1b1f417"
+      }
+    ],
+    "note": "publicKey comes from FIPS 205 key generation over okm; okm[48:72] is PK.seed, its first half"
+  }
+}
