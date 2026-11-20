@@ -72,31 +72,32 @@ elliptic-curve and structured-lattice assumptions, so a guard is robust to a
 break of either.
 
 This IIP is a self-contained first deliverable of the IIP-64 migration. It needs
-no new address format, no emergency mode, no account-level key change, and no
-support from exchanges, hardware wallets, or other chains.
+no new address format, no protocol-wide emergency freeze, no account-level key
+change, and no support from exchanges, hardware wallets, or other chains.
 
 **Draft 5 extension: two non-convertible bucket classes.** Building on the same
 SLH-DSA-SHA2-192s (`algID = 0x12`) verification engine, Draft 5 distinguishes
 two fixed-rule bucket classes (§13) that MUST NOT convert into one another:
 
-* **Class B — Staking Bunker Bucket (Personal Sovereign Self-Custody, §§1–12).**
+* **Class B — Staking Bunker Bucket (Self-Custody, §§1–12).**
   Native PoS staking buckets earning rewards and voting, with **no emergency
-  exit** (native maturity and withdrawal waits always apply) and ultimate
-  authority **`Guard > Owner`**. Draft 5 adds an optional owner-initiated
+  exit** (native maturity and withdrawal waits always apply) and guard-sovereign
+  authority (**`Guard > Owner`**). Draft 5 adds an optional owner-initiated
   T+90-day recovery window (`unbindDelay`) with unlimited guard-signed
-  `Cancel` (while keeping `unbindDelay = 0`, i.e., permanent hard lock, as the
-  default), plus split nonces (`ownerNonce`, `guardNonce`, `requestId`) to
-  prevent nonce-starvation attacks.
-* **Class A — Non-Staking Co-Custody Vault Bucket (Institutional Co-Custody &
-  Liquid Security Vault, §13).** Zero-yield, zero-voting-power native vault
-  buckets with ultimate authority **`Owner > Guard`**, designed for foundations,
-  DAO treasuries, institutional holders, and independent post-quantum security
-  custodians (as well as non-staking individual vaults). Co-signed (`Owner`
-  ECDSA + `Guard` SLH-DSA) withdrawals execute immediately (T+0) for an explicit
-  `amount` directly to `recipient`. Unilateral `Owner` exit enforces a mandatory
-  **T+90-day** public on-chain cooldown (`3,110,400` blocks) that `Guard` cannot
-  cancel or extend, and closes the vault upon finalization. `Guard` alone cannot
-  move funds or change ownership.
+  `GuardUnbindCancel` (while keeping `unbindDelay = 0`, i.e., permanent hard
+  lock, as the default), plus isolated `guardNonce` and `nextRequestId` counters
+  to prevent nonce-starvation attacks.
+* **Class A — Non-Staking Co-Custody Vault Bucket (Institutional Co-Custody,
+  §13).** Zero-yield, zero-voting-power native vault buckets with owner-sovereign
+  authority (**`Owner > Guard`**), designed for foundations, DAO treasuries,
+  institutional holders, and independent post-quantum security custodians (as
+  well as non-staking individual vaults). Co-signed (`Owner` ECDSA tx sender +
+  `Guard` SLH-DSA) withdrawals execute immediately (T+0) for an explicit
+  `amount` directly to `recipient`. Unilateral `Owner` exit
+  (`VaultInitiateExit`) enforces a mandatory **T+90-day** public on-chain
+  cooldown (`3,110,400` blocks at 2.5 s/block) that `Guard` cannot cancel or
+  extend, and permanently closes the vault upon `VaultFinalizeExit`. `Guard`
+  alone cannot move funds or change ownership.
 
 ### Overview
 
@@ -170,9 +171,11 @@ signature from the guard key. Anyone can submit that signed operation.*
    can forge an owner's ECDSA signature can redirect votes with
    `ChangeCandidate`. Guarding that operation removes a path to capturing
    consensus.
-5. **The vault also covers loss of the everyday key.** If an owner loses their
-   ECDSA key, the guard alone can withdraw the bucket to a new address or
-   transfer it to a new owner, with any account paying the gas.
+5. **The Class B vault also covers loss of the everyday key.** On a Class B
+   staking bucket, if an owner loses their ECDSA key, the guard alone can
+   withdraw the bucket to a new address or transfer it to a new owner, with any
+   account paying the gas. (On Class A co-custody vaults, losing the Owner key
+   freezes the vault until a co-signed operation or recovery policy applies.)
 6. **Institutional co-custody without PoS distortion (Class A).** Foundations,
    DAO treasuries, venture funds, and large holders often manage assets across
    many wallets and require protocol-level co-custody with an independent
@@ -1135,8 +1138,10 @@ non-consensus metadata (vault and key indices per bucket) to speed this up.
 ### 13. Class A Non-Staking Co-Custody Vaults and Recovery Extensions (Draft 5)
 
 Draft 5 extends the protocol with a second, strictly non-convertible bucket
-class (**Class A**) and hardens the state machine, nonce model, and recovery
-semantics across both classes.
+class (**Class A**) and hardens the state machine, nonce isolation, and recovery
+semantics across both classes. Because Draft 4 was never activated on mainnet,
+the state layout and extensions in this section supersede §4's `BucketGuard` at
+`QSBHeight` (with §4's `nonce` renamed to `guardNonce`).
 
 #### 13.1 Bucket classes and strict non-convertibility
 
@@ -1145,25 +1150,28 @@ creation/binding time:
 
 | Property | Class A — Non-Staking Vault Bucket | Class B — Staking Bunker Bucket (§§1–12) |
 |---|---|---|
-| Primary use case | Institutional co-custody (foundations, treasuries, VCs, security custodians) and non-staking individual vaults | Personal sovereign post-quantum staking self-custody |
-| Staking yield &amp; voting power | None (0 rewards, 0 vote weight) | Native PoS rewards, IIP-59 compounding, delegate voting |
-| Ultimate authority | **`Owner > Guard`** | **`Guard > Owner`** |
-| Co-signed exit (`Owner` + `Guard`) | **T+0 immediate** for explicit `amount` directly to `recipient` | No emergency exit; native staking maturity and withdrawal wait always apply |
-| Unilateral `Owner` unbind | Mandatory **T+90-day** public cooldown (`UNBIND_DELAY_BLOCKS = 3,110,400`); `Guard` MUST NOT cancel or extend | Optional: `unbindDelay = 0` (∞ permanent hard lock, default) or `UNBIND_DELAY_BLOCKS`; `Guard` MAY `Cancel` unlimited times while `blockHeight < expiresAt` |
-| Unilateral `Guard` authority | `RevokeSignatures` only; MUST NOT withdraw, transfer, or modify owner | Full `GuardedBucketOp` authority (§6), `Cancel`, and independent post-quantum recovery |
+| Primary use case | Institutional co-custody (foundations, treasuries, VCs, security custodians) and non-staking individual vaults | Self-custody post-quantum staking protection |
+| Staking yield & voting power | None (0 rewards, 0 vote weight; excluded from `totalStaked`) | Native PoS rewards, IIP-59 compounding, delegate voting |
+| Ultimate authority | **`Owner > Guard`** | **`Guard > Owner`** (unconditional when `unbindDelay = 0`; subject to Guard liveness when `unbindDelay > 0`) |
+| Co-signed exit (`Owner` + `Guard`) | **T+0 immediate** (`VaultWithdraw`) for explicit `amount` directly to `recipient` | No emergency exit; native staking maturity and withdrawal wait always apply |
+| Unilateral `Owner` exit / unbind | Mandatory **T+90-day** public cooldown (`VaultInitiateExit`, `UNBIND_DELAY_BLOCKS = 3,110,400`); `Guard` MUST NOT cancel or extend | Optional (`GuardUnbindInitiate`): `unbindDelay = 0` (permanent lock, default) or `UNBIND_DELAY_BLOCKS`; `Guard` MAY `GuardUnbindCancel` while `blockHeight < expiresAt` |
+| Unilateral `Guard` authority | `VaultRevokeSignatures` only; MUST NOT withdraw, transfer, or modify owner | Full `GuardedBucketOp` authority (§6), `GuardUnbindCancel`, and independent post-quantum recovery |
 | Cross-class conversion | **Forbidden** | **Forbidden** |
 
-**Non-convertibility invariant.** There MUST be no protocol transition from
+**Non-convertibility invariant.** The protocol provides no transition path from
 Class B to Class A or from Class A to Class B. Moving funds from Class B to
 Class A requires completing the full native Class B unstake and withdrawal
-waiting period first, preventing any bypass of PoS maturity or cooldown rules.
+waiting period first, so Class A provides no bypass path for PoS maturity or
+withdrawal cooldowns.
 
-#### 13.2 Split nonce model (preventing nonce starvation)
+#### 13.2 State layout, storage namespace, and nonce isolation
 
 A single shared nonce incremented on every bucket mutation allows an adversarial
 or automated ECDSA caller (or IIP-59 auto-compounding) to front-run and
-repeatedly invalidate an offline-signed SLH-DSA `Cancel` or rescue transaction.
-Draft 5 therefore separates authorization counters:
+repeatedly invalidate an offline-signed SLH-DSA cancel or rescue transaction.
+Draft 5 supersedes §4's `BucketGuard` with `BucketGuardV2` (retaining prefix
+`_bucketGuard = 9` for Class B) and adds a dedicated native vault namespace
+`_vaultBucket = 10` for Class A:
 
 ```protobuf
 message BucketGuardV2 {
@@ -1171,142 +1179,214 @@ message BucketGuardV2 {
   bytes  publicKey      = 2;  // 48 bytes; empty iff cleared/tombstone
   uint32 bucketClass    = 3;  // 1 = CLASS_A_VAULT, 2 = CLASS_B_STAKING
   uint64 generation     = 4;  // incremented on every key change (bind, rotate, transfer, clear)
-  uint64 guardNonce     = 5;  // incremented ONLY by guard-authorized ops & RevokeSignatures
-  uint64 ownerNonce     = 6;  // incremented by owner-only recovery actions
+  uint64 guardNonce     = 5;  // incremented ONLY by guard-authorized ops & VaultRevokeSignatures
+  uint64 nextRequestId  = 6;  // monotonically incremented on every exit/unbind initiation
   uint64 boundHeight    = 7;
-  uint64 unbindDelay    = 8;  // Class A: fixed UNBIND_DELAY_BLOCKS; Class B: 0 (∞) or UNBIND_DELAY_BLOCKS
-  PendingUnbind pending = 9;  // absent unless an unbind/recovery request is active
+  uint64 unbindDelay    = 8;  // immutable after bind: Class A = UNBIND_DELAY_BLOCKS; Class B = 0 or UNBIND_DELAY_BLOCKS
+  uint64 cancelCooldown = 9;  // Class B only: earliest blockHeight for next GuardUnbindInitiate after a Cancel
+  PendingUnbind pending = 10; // absent unless an exit/unbind request is active
 }
 
 message PendingUnbind {
-  uint64 requestId   = 1;     // monotonically increasing per bucket
+  uint64 requestId   = 1;     // assigned from nextRequestId (which increments to requestId + 1)
   uint64 startHeight = 2;
   uint64 expiresAt   = 3;     // startHeight + unbindDelay
 }
+
+message VaultBucket {
+  uint64 vaultIndex = 1;      // monotonic counter separate from staking totalBucketCount; never reused
+  bytes  owner      = 2;      // 20-byte ECDSA address
+  bytes  amount     = 3;      // big-endian uint256 in Rau
+}
 ```
 
+* **Class A storage and accounting:** Class A vaults live in native staking
+  protocol state under prefix `_vaultBucket = 10`, with a dedicated monotonic
+  `totalVaultCount` index space completely separate from `totalBucketCount`.
+  Vault balances are held in a dedicated protocol pool address (`vaultPool`),
+  excluded from `totalStaked`, delegate voting power, and PoS reward
+  distribution, while remaining part of circulating supply accounting.
+* **Owner authentication:** Owner-only and co-signed Class A actions are
+  authenticated by the outer ECDSA transaction sender (`msg.sender == owner`),
+  leveraging the native ECDSA account nonce without requiring a separate
+  `ownerNonce` field.
 * **`guardNonce` isolation:** Owner-only actions (`DepositToStake`,
-  `AddDepositForCompound`, `InitiateUnbindGuard`, `CancelOwnerUnbind`) MUST NOT
-  increment `guardNonce`.
-* **`Cancel` idempotency:** On Class B, a guard-signed `CancelUnbind` binds to a
-  specific `requestId` (not a shared state nonce). If that `requestId` is no
-  longer active, the cancel succeeds idempotently without reverting or consuming
-  a fresh guard authorization.
+  `AddDepositForCompound`, `VaultAddDeposit`, `VaultInitiateExit`,
+  `VaultCancelExit`, `GuardUnbindInitiate`) MUST NOT increment `guardNonce`.
+  On Class B, `DepositToStake` and compounding only increase principal, so
+  preserving `guardNonce` across deposits does not weaken guard-signed
+  whole-bucket authorizations; on Class A, `VaultWithdraw` signs an explicit
+  `amount`, so deposits cannot alter the authorized payout.
+* **`nextRequestId` and idempotent `GuardUnbindCancel`:** `nextRequestId` starts
+  at `1` and increments monotonically on every `VaultInitiateExit` or
+  `GuardUnbindInitiate`, never resetting while the bucket/vault exists. On
+  Class B, `GuardUnbindCancel(requestId)` MUST revert with `ErrFutureRequestId`
+  if `requestId >= nextRequestId`, MUST revert with `ErrUnbindElapsed` if
+  `pending` matches `requestId` and `blockHeight >= pending.expiresAt`, and
+  succeeds idempotently (charging gas, emitting no state change) if
+  `requestId < nextRequestId` and `pending` is already cleared.
 
 #### 13.3 Class A Vault state machine and operations
 
-Class A vaults MAY be implemented natively alongside the staking store (sharing
-the `pkg/pqcrypto` SLH-DSA verifier) or as an audited non-upgradeable EVM vault
-contract calling a consensus SLH-DSA-SHA2-192s precompile. Either
-implementation MUST enforce the identical state machine:
+Class A vaults enforce the following normative state transitions (note:
+`UNBIND_DELAY_BLOCKS = 3,110,400` corresponds to 90 days at the current 2.5 s
+block interval; this duration is a block-count constant and scales if governance
+changes the block interval):
+
+| State | Permitted Actions | Forbidden Actions |
+|---|---|---|
+| `Active` | `VaultAddDeposit` (owner-only), `VaultWithdraw` (co-signed), `VaultRotateOwner` (co-signed), `VaultRotateGuard` (co-signed), `VaultRevokeSignatures` (guard-only), `VaultInitiateExit` (owner-only) | `VaultCancelExit`, `VaultFinalizeExit`, any unilateral Guard withdrawal/transfer |
+| `Unbinding` | `VaultWithdraw` (co-signed; preserves `expiresAt` if partial, closes vault if full), `VaultRevokeSignatures` (guard-only), `VaultCancelExit` (owner-only), `VaultFinalizeExit` (permissionless at `blockHeight >= expiresAt`) | `VaultAddDeposit`, `VaultInitiateExit`, `VaultRotateOwner`, `VaultRotateGuard`, Guard cancel/extend |
+| `Closed` | None (vault deleted; `BucketGuardV2` tombstone retained so `vaultIndex` and counters are never reused) | All actions (`ErrVaultClosed`) |
 
 ```mermaid
 stateDiagram-v2
     direction LR
     state "Active (Owner + Guard)" as Active
     state "Unbinding (requestId, expiresAt)" as Unbinding
-    state "Closed / Deleted" as Closed
+    state "Closed (Deleted + Tombstone)" as Closed
 
-    [*] --> Active: CreateVault + Bind (Owner ECDSA + Guard PoP)
-    Active --> Active: AddDeposit / Co-signed Partial Withdraw / RotateOwner / RotateGuard / Guard RevokeSignatures
-    Active --> Closed: Co-signed Full Withdraw (to recipient)
-    Active --> Unbinding: Owner InitiateUnbindGuard (T+90d)
-    Unbinding --> Active: Owner CancelOwnUnbind (resets timer; next request waits full 90d)
-    Unbinding --> Unbinding: Co-signed Partial Withdraw (preserves expiresAt) / Guard RevokeSignatures
-    Unbinding --> Closed: Co-signed Full Withdraw (to recipient)
-    Unbinding --> Closed: FinalizeUnbind (blockHeight >= expiresAt, credits Owner)
+    [*] --> Active: VaultCreate (Owner ECDSA + Guard PoP)
+    Active --> Active: VaultAddDeposit / Co-signed Partial VaultWithdraw / VaultRotateOwner / VaultRotateGuard / Guard VaultRevokeSignatures
+    Active --> Closed: Co-signed Full VaultWithdraw (to recipient)
+    Active --> Unbinding: Owner VaultInitiateExit (T+90d)
+    Unbinding --> Active: Owner VaultCancelExit (next exit waits full 90d)
+    Unbinding --> Unbinding: Co-signed Partial VaultWithdraw (preserves expiresAt) / Guard VaultRevokeSignatures
+    Unbinding --> Closed: Co-signed Full VaultWithdraw (to recipient)
+    Unbinding --> Closed: VaultFinalizeExit (blockHeight >= expiresAt, credits Owner)
     Closed --> [*]
 ```
 
 Normative rules for Class A:
 
-1. **Creation and Proof of Possession (PoP).** Creating/binding a Class A vault
-   MUST carry both the `Owner` ECDSA authorization and a `Guard` SLH-DSA
-   `acceptSig` (PoP) over `VAULT_ACCEPT`, committing to `qsbDomain`,
-   `bucketClass = CLASS_A_VAULT`, `bucketIndex`, `owner`, `generation`,
-   `unbindDelay = UNBIND_DELAY_BLOCKS`, `algID`, and `publicKey`.
-2. **Co-signed operations (`Owner` ECDSA + `Guard` SLH-DSA over the identical
-   canonical transcript):**
-   * `VAULT_WITHDRAW(amount, recipient)`: transfers an explicit `amount` (MUST
-     be `> 0` and `≤` current balance) atomically to `recipient` with zero
-     protocol waiting period. If the remaining balance becomes `0`, the vault is
-     closed and any `PendingUnbind` is cleared. Partial withdrawal during
-     `Unbinding` MUST NOT clear `PendingUnbind` or alter `expiresAt`.
-   * `VAULT_ROTATE_OWNER(newOwner)`: atomically updates `owner` without
-     withdrawing funds (e.g., for institutional multisig rotation).
-   * `VAULT_ROTATE_GUARD(newGuard)`: installs a new SLH-DSA key with its own
-     PoP (`newAcceptSig`), incrementing `generation` and `guardNonce`.
+1. **Creation, minimum balance, and Proof of Possession (PoP).** `VaultCreate`
+   MUST carry an initial deposit `>= MIN_VAULT_BALANCE` (set in `ParamsV2` to
+   prevent dust-vault state spam) and a `Guard` SLH-DSA `acceptSig` (PoP) over
+   `VAULT_ACCEPT`, committing to `qsbDomain`, `bucketClass = CLASS_A_VAULT`,
+   `vaultIndex`, `owner`, `generation = 1`, `unbindDelay = UNBIND_DELAY_BLOCKS`,
+   `algID`, and `publicKey`.
+2. **Co-signed operations (submitted by `owner` as outer ECDSA sender, carrying
+   a valid `Guard` SLH-DSA signature over `VAULT_CALL`):**
+   * `VaultWithdraw(amount, recipient)`: transfers an explicit `amount` (`> 0`
+     and `<= balance`) atomically to `recipient` with zero protocol waiting
+     period. If `0 < balance - amount < MIN_VAULT_BALANCE`, the action MUST
+     revert with `ErrBelowMinBalance` (caller must either leave at least
+     `MIN_VAULT_BALANCE` or withdraw the full balance). If `balance - amount == 0`,
+     the vault transitions to `Closed` and any `PendingUnbind` is cleared.
+     Partial withdrawal during `Unbinding` MUST NOT clear `PendingUnbind` or
+     alter `expiresAt`.
+   * `VaultRotateOwner(newOwner)`: permitted ONLY in `Active`; atomically
+     updates `owner` without withdrawing funds.
+   * `VaultRotateGuard(newGuard)`: permitted ONLY in `Active`; installs a new
+     SLH-DSA key with its own `VAULT_ACCEPT` PoP, incrementing `generation` and
+     `guardNonce`.
 3. **Unilateral `Owner` actions:**
-   * `AddDeposit`: permitted ONLY in `Active`. **MUST revert in `Unbinding`** so
-     fresh deposits cannot inherit an already-elapsed cooldown window.
-   * `InitiateUnbindGuard`: transitions `Active → Unbinding` with
-     `expiresAt = blockHeight + UNBIND_DELAY_BLOCKS` (3,110,400 blocks ≈ 90 days
-     at 2.5 s/block). MUST revert if already `Unbinding`.
-   * `CancelOwnUnbind`: Owner MAY voluntarily cancel their own `PendingUnbind`,
-     returning to `Active`; any subsequent `InitiateUnbindGuard` MUST wait a
-     full `UNBIND_DELAY_BLOCKS` from the new height.
-   * `FinalizeUnbind`: callable by any account once `blockHeight >= expiresAt`.
-     Credits the entire remaining balance **only to the recorded `owner`** (the
-     caller MUST NOT specify an alternate recipient) and **permanently closes
-     and deletes the vault instance** (retaining tombstone counters if the index
-     space requires it). A closed vault MUST NOT accept subsequent deposits.
+   * `VaultAddDeposit`: caller MUST be `owner`; permitted ONLY in `Active`.
+     **MUST revert with `ErrVaultUnbinding` in `Unbinding`** so fresh deposits
+     cannot inherit an already-elapsed cooldown window.
+   * `VaultInitiateExit`: transitions `Active -> Unbinding` with
+     `requestId = nextRequestId`, `nextRequestId += 1`, and
+     `expiresAt = blockHeight + UNBIND_DELAY_BLOCKS`. Reverts with
+     `ErrAlreadyUnbinding` if already `Unbinding`.
+   * `VaultCancelExit`: Owner MAY voluntarily cancel their own `PendingUnbind`,
+     returning to `Active`; any subsequent `VaultInitiateExit` receives a new
+     `requestId` and MUST wait a full `UNBIND_DELAY_BLOCKS`.
+   * `VaultFinalizeExit`: callable by any account once `blockHeight >= expiresAt`.
+     Credits the entire remaining balance **only to the recorded `owner`** and
+     **permanently closes and deletes the `VaultBucket`** while retaining a
+     `BucketGuardV2` tombstone (`publicKey = empty`, counters preserved) so old
+     signatures can never replay.
 4. **Unilateral `Guard` actions:**
-   * `RevokeSignatures`: `Guard` MAY unilaterally increment `guardNonce` to
-     invalidate any outstanding unexecuted co-signed pre-authorizations.
-     `RevokeSignatures` MUST NOT move funds, alter `owner`, or modify/extend
-     `PendingUnbind.expiresAt`.
+   * `VaultRevokeSignatures`: `Guard` MAY unilaterally increment `guardNonce`
+     (submitted by any gas sponsor) to invalidate outstanding unexecuted
+     pre-signed ops. MUST NOT move funds, alter `owner`, or modify `expiresAt`.
    * All other unilateral `Guard` actions MUST fail with `ErrUnauthorizedOperator`.
-5. **Unilateral `TransferOwnership` and `ReplaceGuard` are forbidden.**
 
-#### 13.4 Class B optional recovery and IIP-59 compounding isolation
+#### 13.4 Class B optional recovery, cancel cooldown, and IIP-59 compounding isolation
 
-For Class B (personal sovereign staking buckets), Draft 5 preserves Draft 4's
-`unbindDelay = 0` (∞ permanent hard lock) as the default and adds an opt-in
-`unbindDelay = UNBIND_DELAY_BLOCKS` (90 days) recovery policy selected at
-`BindBucketGuard` time (committed inside `acceptSig` PoP):
+For Class B (personal staking buckets), Draft 5 preserves Draft 4's
+`unbindDelay = 0` (permanent lock) as the default and adds an opt-in
+`unbindDelay = UNBIND_DELAY_BLOCKS` (90 days) recovery policy selected
+immutably at `BindBucketGuard` time (committed inside `ACCEPT` PoP):
 
 * **Deterministic race-free boundary:** Using consensus block height:
-  * `CancelUnbind` (signed by `Guard` over `requestId`) is valid iff
-    `blockHeight < pending.expiresAt`.
-  * `FinalizeUnbind` (clearing the guard so `Owner` regains legacy staking
-    control) is valid iff `blockHeight >= pending.expiresAt`.
-  * The two actions cannot both succeed in the same block, eliminating
-    intra-block ordering races.
-* **Independence from PoS timers:** Completing a 90-day guard recovery on
-  Class B restores `Owner` staking authority ONLY; it MUST NOT bypass native
-  staking maturity, `autoStake`, or the native withdrawal waiting period.
-* **IIP-59 auto-compounding isolation:** While a Class B bucket has an active
-  `PendingUnbind`, system-level `AddDepositForCompound` MUST NOT revert global
-  reward settlement and MUST NOT increment `guardNonce`. Implementations MUST
-  either route compounding rewards during `PendingUnbind` to a separate
-  guard-protected pending-reward ledger or skip auto-deposit cleanly without
-  failing the epoch reward batch.
-* **Post-quantum destination alignment (IIP-64):** Because `GuardedBucketOp`
-  currently credits 20-byte ECDSA addresses under `ParamsV1`, full end-to-end
-  post-quantum migration of Class B funds upon Q-Day depends on IIP-64
-  (ML-DSA post-quantum EOA accounts) or migrating into a newly guarded bucket.
-  `GuardedBucketOp` already supports gas sponsorship by any relayer (`sponsor`),
-  and future parameter versions MAY admit IIP-64 post-quantum addresses directly
-  in `recipient` without changing the length-prefixed transcript layout (§6).
+  * `GuardUnbindInitiate` (owner-only, requires `unbindDelay > 0`, no active
+    `pending`, and `blockHeight >= cancelCooldown`) creates `PendingUnbind` with
+    `requestId = nextRequestId`, `nextRequestId += 1`, and
+    `expiresAt = blockHeight + unbindDelay`.
+  * `GuardUnbindCancel(requestId)` (guard-signed, sponsorable) is valid iff
+    `blockHeight < pending.expiresAt`. It clears `pending` and sets
+    `cancelCooldown = blockHeight + CANCEL_COOLDOWN_BLOCKS` (e.g., 241,920
+    blocks ≈ 7 days) so a compromised ECDSA key cannot force the offline Guard
+    onto a zero-cost continuous-cancel treadmill.
+  * `GuardUnbindFinalize` (permissionless) is valid iff
+    `blockHeight >= pending.expiresAt`. It transitions `BucketGuardV2` to a
+    tombstone (`publicKey = empty`, `generation += 1`, counters retained),
+    restoring legacy ECDSA staking control.
+* **Independence from PoS timers:** Completing `GuardUnbindFinalize` on Class B
+  restores `Owner` staking authority ONLY; it MUST NOT bypass native staking
+  maturity, `autoStake`, or the native withdrawal waiting period.
+* **IIP-59 auto-compounding isolation (single deterministic rule):** While a
+  Class B bucket has an active `PendingUnbind`, system-level
+  `AddDepositForCompound` MUST skip auto-depositing into that bucket (leaving
+  the epoch reward in the voter's standard claimable reward balance) without
+  reverting the epoch reward batch and without incrementing `guardNonce`.
+* **Post-quantum destination alignment (IIP-64):** Under `ParamsV1`/`ParamsV2`,
+  `GuardedBucketOp` credits 20-byte ECDSA addresses. Full end-to-end
+  post-quantum migration of Class B funds upon CRQC availability relies on
+  IIP-64 (ML-DSA post-quantum EOA accounts) or migrating into a newly guarded
+  bucket; future parameter versions MAY admit IIP-64 post-quantum addresses
+  directly in `recipient` without changing the length-prefixed transcript layout
+  (§6).
 
-#### 13.5 Class A transcript domain separation
+#### 13.5 Class A and Draft 5 transcript domain separation
 
 Class A uses dedicated FIPS 205 contexts distinct from Class B (§7), preventing
 any cross-class signature replay:
 
-| Message | Signed by | `ctx` (ASCII) |
+| Message | Signed by (SLH-DSA) | `ctx` (ASCII) |
 |---|---|---|
-| `VAULT_CALL` | `Guard` (SLH-DSA) + `Owner` (ECDSA outer/co-sign) | `IoTeX-PQ-Vault-Call-v1` (22 bytes) |
-| `VAULT_ACCEPT` | incoming `Guard` (SLH-DSA) | `IoTeX-PQ-Vault-Accept-v1` (24 bytes) |
+| `VAULT_CALL` | Class A `Guard` key | `IoTeX-PQ-Vault-Call-v1` (22 bytes) |
+| `VAULT_ACCEPT` | incoming Class A `Guard` key | `IoTeX-PQ-Vault-Accept-v1` (24 bytes) |
+| `GUARD_CANCEL` | Class B `Guard` key | `IoTeX-PQ-Bucket-Cancel-v1` (25 bytes) |
 
-Every `VAULT_CALL` transcript commits canonically to `qsbDomain(32)`,
-`uint32 bucketClass`, `uint64 bucketIndex`, `owner(20)`, `guardKeyID(32)`,
-`uint64 generation`, `uint64 guardNonce`, `uint64 deadline`,
-`uint64 anchorHeight`, `anchorHash(32)`, `uint32 op`, `uint256 amount`,
-`bytes(recipient)`, `bytes(newOwner)`, `hasNewGuard` + incoming key fields, and
-`bytes(sponsor)`. Both `Owner` and `Guard` commit to the exact same canonical
-operation fields; the ECDSA signature is NOT included inside the SLH-DSA
-transcript (preventing circular dependency and signature malleability).
+Using the canonical big-endian encoding rules of §7 (with `uint256` encoded as
+fixed 32-byte big-endian and `bytes(x)` as `uint32_be(len(x)) || x`):
+
+```
+VAULT_CALL   = qsbDomain(32) || uint32 bucketClass(1) || uint64 vaultIndex
+             || owner(20) || guardKeyID(32) || uint64 generation
+             || uint64 guardNonce || uint64 deadline
+             || uint64 anchorHeight || anchorHash(32) || uint32 op
+             || uint256 amount(32) || bytes(recipient) || bytes(newOwner)
+             || uint8 hasNewGuard || [uint32 algID || bytes(publicKey)]
+             || bytes(sponsor)
+
+VAULT_ACCEPT = qsbDomain(32) || uint32 bucketClass(1) || uint64 vaultIndex
+             || uint64 newGeneration || resultingOwner(20)
+             || uint64 unbindDelay || uint32 algID || bytes(publicKey)
+             || callHash(64)
+
+GUARD_CANCEL = qsbDomain(32) || uint32 bucketClass(2) || uint64 bucketIndex
+             || uint64 generation || uint64 requestId || uint64 deadline
+             || uint64 anchorHeight || anchorHash(32) || bytes(sponsor)
+```
+
+For Class B, `ACCEPT` (§7) is extended with `uint32 bucketClass(2)` and
+`uint64 unbindDelay` so the incoming Guard key explicitly commits to the class
+and recovery policy (`0` vs `UNBIND_DELAY_BLOCKS`). On Class A, `Owner`
+authenticates as the outer ECDSA transaction sender (`msg.sender == owner`)
+executing the exact decoded action; the ECDSA signature is never embedded inside
+the SLH-DSA transcript.
+
+New Draft 5 receipt statuses (to be allocated in `iotex-proto` alongside
+§9.5): `ErrClassMismatch`, `ErrVaultUnbinding`, `ErrVaultClosed`,
+`ErrAlreadyUnbinding`, `ErrUnbindNotElapsed`, `ErrUnbindElapsed`,
+`ErrCancelCooldown`, `ErrFutureRequestId`, `ErrBelowMinBalance`. Exact
+parameter values (`UNBIND_DELAY_BLOCKS = 3,110,400`, `CANCEL_COOLDOWN_BLOCKS =
+241,920`, `MIN_VAULT_BALANCE`), `QSBSizeV2` entries, protobuf oneof IDs, ABI
+selectors, and updated test vectors MUST be finalized in `ParamsV2` and
+`assets/iip-qsb/vectors/` before this IIP leaves Draft.
 
 #### 13.6 Adversarial model summary
 
@@ -1314,14 +1394,18 @@ At the protocol layer, the chain observes only two cryptographic principals —
 `Owner (ECDSA)` and `Guard (SLH-DSA)` — across four failure/adversary states:
 
 1. **Compromised or adversarial `Owner`:** On Class B, `Guard` cancels
-   malicious recovery requests indefinitely (`Guard > Owner`). On Class A,
-   unilateral exit is bounded by a mandatory T+90-day public cooldown.
+   malicious recovery requests indefinitely (`Guard > Owner`), bounded by
+   `CANCEL_COOLDOWN_BLOCKS` against griefing. On Class A, unilateral exit is
+   bounded by a mandatory T+90-day public cooldown during which legitimate
+   `Owner` + `Guard` may co-sign an immediate sweep to a safe `recipient`.
 2. **Adversarial `Guard`:** On Class A, `Guard` cannot move funds, alter
    `owner`, or extend/cancel the T+90-day cooldown (`Owner > Guard`).
 3. **Unavailable / lost `Guard`:** On Class A (and Class B when `unbindDelay > 0`),
    `Owner` recovers full control after 90 days, eliminating permanent deadlock.
-4. **Lost / deprecated `Owner` (Q-Day):** On Class B, `Guard` retains full
-   independent authority to manage and migrate funds without an ECDSA signature.
+4. **Lost / deprecated `Owner` (CRQC availability):** On Class B, `Guard`
+   retains full independent authority to manage and migrate funds without an
+   ECDSA signature. On Class A, losing the `Owner` key permanently freezes the
+   vault (by design, preventing unilateral external custodian seizure).
 
 ## Rationale
 
@@ -1438,11 +1522,13 @@ choice is the security category and the on-chain size.
 
 * **Guard record, not a new owner.** The owner, bucket index, voting, and rewards
   keep working unchanged. The guard is an additional lock.
-* **No ECDSA escape hatch, and no emergency mode.** Any ECDSA path to remove a
-  guard is a path an attacker could use. `clearGuard` is guard-authorized, not
-  an ECDSA path; it deliberately returns the bucket to ECDSA control and is
-  covered in Security Considerations. Losing the guard key is mitigated by
-  deriving it from a seed (§12).
+* **No ECDSA escape hatch on default Class B, and no protocol-wide emergency
+  mode.** On Class B with the default `unbindDelay = 0`, any ECDSA path to
+  remove a guard is a path an attacker could use; `clearGuard` is
+  guard-authorized, not an ECDSA path, and losing the guard key is mitigated by
+  deriving it from a seed (§12) or opting into `unbindDelay = UNBIND_DELAY_BLOCKS`
+  (§13.4). Class A vaults (§13.3) intentionally grant `Owner > Guard` with a
+  mandatory T+90-day unilateral exit for institutional co-custody.
 * **Explicit operations instead of wrapping existing actions.** Wrapping the
   existing actions would require signing over a byte encoding that does not
   uniquely identify the operation (`Unstake` and `WithdrawStake` share one
@@ -1563,22 +1649,27 @@ The following must be covered before activation:
 * **Draft 5 invariants (§13):**
   * Non-convertibility: every path attempting to convert Class B → Class A or
     Class A → Class B fails.
-  * Split nonces: Owner-only deposits, IIP-59 auto-compounding, and
-    `InitiateUnbindGuard` MUST NOT increment `guardNonce` or invalidate a
-    pending Guard `CancelUnbind` bound to `requestId`.
-  * Class A lifecycle: `AddDeposit` reverts in `Unbinding`; partial co-signed
-    `VAULT_WITHDRAW` during `Unbinding` preserves `expiresAt`; full withdrawal
-    or `FinalizeUnbind` (`blockHeight >= expiresAt`) permanently closes the
-    vault; `FinalizeUnbind` credits only the recorded `owner`; unilateral Guard
-    transfer/withdrawal/cancel fails; `RevokeSignatures` increments `guardNonce`
-    without altering `expiresAt`.
-  * Class B recovery boundary: `CancelUnbind` succeeds at `expiresAt - 1` and
-    fails at `expiresAt`; `FinalizeUnbind` fails at `expiresAt - 1` and succeeds
-    at `expiresAt`; IIP-59 auto-compounding during `PendingUnbind` does not
-    abort global epoch reward settlement.
+  * Nonce isolation: Owner-only deposits, IIP-59 auto-compounding, and
+    `GuardUnbindInitiate` MUST NOT increment `guardNonce` or invalidate a
+    pending `GuardUnbindCancel` bound to `requestId`.
+  * Class A lifecycle: `VaultAddDeposit`, `VaultRotateOwner`, and
+    `VaultRotateGuard` revert in `Unbinding`; partial co-signed `VaultWithdraw`
+    during `Unbinding` preserves `expiresAt` and enforces `MIN_VAULT_BALANCE`;
+    full withdrawal or `VaultFinalizeExit` (`blockHeight >= expiresAt`)
+    permanently closes the vault with a tombstone; `VaultFinalizeExit` credits
+    only the recorded `owner`; unilateral Guard transfer/withdrawal/cancel
+    fails; `VaultRevokeSignatures` increments `guardNonce` without altering
+    `expiresAt`.
+  * Class B recovery boundary: `GuardUnbindCancel` succeeds at `expiresAt - 1`
+    (setting `cancelCooldown`) and fails at `expiresAt`; `GuardUnbindFinalize`
+    fails at `expiresAt - 1` and succeeds at `expiresAt`; `GuardUnbindCancel`
+    for an already-cleared `requestId < nextRequestId` succeeds idempotently and
+    reverts for `requestId >= nextRequestId`; IIP-59 auto-compounding skips
+    buckets with an active `PendingUnbind` without aborting epoch reward
+    settlement.
   * Cross-class domain separation: a `VAULT_CALL` / `VAULT_ACCEPT` signature
-    MUST fail on Class B, and a Class B `CALL` / `ACCEPT` signature MUST fail on
-    Class A.
+    MUST fail on Class B, and a Class B `CALL` / `ACCEPT` / `GUARD_CANCEL`
+    signature MUST fail on Class A.
 
 ## Implementation
 
@@ -1706,23 +1797,27 @@ benchmarks of §8 on linux/amd64 and native linux/arm64.
   ACVP vectors, decoding MUST be fuzzed, and the implementation SHOULD receive an
   external audit before activation. Two independent implementations with
   differential fuzzing are RECOMMENDED for consensus verification.
-* **Class A quantum-security scope.** Because Class A permits unilateral ECDSA
-  recovery after `UNBIND_DELAY_BLOCKS` (90 days), it provides **SLH-DSA
-  co-authorization plus a 90-day public time-delay defense**, not permanent
-  immunity to an ECDSA key compromise. Users requiring permanent post-quantum
-  protection against an ECDSA break MUST use Class B with `unbindDelay = 0` (∞)
-  or ensure active monitoring and `Cancel` readiness on Class B.
-* **Block-level SLH-DSA congestion and `Cancel` liveness.** Because each
-  SLH-DSA-SHA2-192s signature is 16,224 bytes, sustained congestion or
-  deliberate block filling with valid PQ operations can delay `CancelUnbind`
-  transactions on Class B. Nodes SHOULD enforce strict pre-verification mempool
-  admission (§9.6), per-sender/per-bucket rate limits, and prioritization for
-  valid `CancelUnbind` operations referencing an active `PendingUnbind`.
+* **Class A and optional Class B recovery security scope.** Because Class A
+  permits unilateral ECDSA exit after `UNBIND_DELAY_BLOCKS` (90 days), it
+  provides **SLH-DSA co-authorization plus a 90-day public time-delay defense**
+  (during which legitimate `Owner` + `Guard` may co-sign an immediate sweep to a
+  safe `recipient`), not permanent immunity to an ECDSA key compromise.
+  Similarly, Class B with `unbindDelay > 0` relies on Guard liveness to submit
+  `GuardUnbindCancel` within the 90-day window. Users requiring unconditional
+  post-quantum protection against an ECDSA break MUST use Class B with
+  `unbindDelay = 0`.
+* **Block-level SLH-DSA congestion and `GuardUnbindCancel` liveness.** Because
+  each SLH-DSA-SHA2-192s signature is 16,224 bytes, sustained congestion or
+  deliberate block filling with valid PQ operations can delay
+  `GuardUnbindCancel` transactions on Class B. Nodes SHOULD enforce strict
+  pre-verification mempool admission (§9.6), per-sender/per-bucket rate limits,
+  and prioritization for valid `GuardUnbindCancel` operations referencing an
+  active `PendingUnbind`.
 * **Explorer and UI disclosure for Class A.** Block explorers and wallets MUST
   NOT label a Class A vault as permanently locked; they SHOULD clearly display
   its Class A co-custody status, whether a `PendingUnbind` is active, and its
   exact `expiresAt` block height.
-* **B-class Guard delegation warning.** Because Class B grants `Guard > Owner`
+* **Class B Guard delegation warning.** Because Class B grants `Guard > Owner`
   sovereignty, delegating a Class B guard key to an untrusted third party grants
   that party unilateral control over the bucket. Third-party co-custody MUST use
   Class A vaults.
@@ -1730,30 +1825,35 @@ benchmarks of §8 on linux/amd64 and native linux/arm64.
 ## Revision History
 
 **Draft 5 (2026-11-20)** introduces Class A non-staking co-custody vaults and
-hardens the state machine, nonce model, and recovery semantics following
-multi-model red-team security reviews:
+hardens the state machine, nonce isolation, and recovery semantics. **All
+transcript, size, and gas vectors will be updated in `ParamsV2` before leaving
+Draft.**
 
 * Simple Summary, Abstract, Motivation, §13: defines two strictly
-  non-convertible bucket classes sharing the same SLH-DSA-SHA2-192s (`0x12`)
-  verification engine — **Class B** (personal sovereign PoS staking bunker,
+  non-convertible native bucket classes sharing the same SLH-DSA-SHA2-192s
+  (`0x12`) verification engine — **Class B** (PoS staking bunker,
   `Guard > Owner`, no emergency exit) and **Class A** (zero-yield, zero-voting
-  co-custody vault, `Owner > Guard`, T+0 co-signed withdrawal to explicit
-  `recipient` and `amount`, mandatory T+90-day unilateral cooldown).
-* §13.2: splits counters into `ownerNonce`, `guardNonce`, and per-request
-  `requestId` to prevent nonce-starvation attacks against offline-signed Guard
-  `Cancel` and rescue operations.
-* §13.3: specifies the complete Class A state machine (`Active → Unbinding →
-  Closed`), forbids `AddDeposit` during `Unbinding`, closes vaults permanently
-  upon `FinalizeUnbind`, and adds `RevokeSignatures` (guard-only) and
-  `RotateOwner` (co-signed).
-* §13.4: adds optional T+90-day recovery for Class B with deterministic
-  `blockHeight < expiresAt` vs `blockHeight >= expiresAt` semantics, IIP-59
-  auto-compounding isolation during `PendingUnbind`, and explicit alignment with
-  IIP-64 (ML-DSA EOAs) as the post-quantum exit destination.
-* §13.5, §13.6, Security Considerations: adds dedicated Class A FIPS 205
-  contexts (`IoTeX-PQ-Vault-Call-v1` / `IoTeX-PQ-Vault-Accept-v1`), formal
-  four-state adversary model, honest scoping of Class A time-delay security,
-  and `CancelUnbind` liveness / mempool DoS guidance.
+  co-custody vault under `_vaultBucket = 10`, `Owner > Guard`, T+0 co-signed
+  `VaultWithdraw` to explicit `recipient` and `amount`, mandatory T+90-day
+  unilateral `VaultInitiateExit`).
+* §13.2: supersedes §4's `BucketGuard` with `BucketGuardV2`, isolating
+  `guardNonce` from owner-only/compounding actions and adding monotonic
+  `nextRequestId` to prevent nonce-starvation attacks and support idempotent
+  `GuardUnbindCancel`.
+* §13.3: specifies the complete Class A state machine (`Active -> Unbinding ->
+  Closed`), `MIN_VAULT_BALANCE`, forbids `VaultAddDeposit` / `VaultRotateOwner`
+  / `VaultRotateGuard` during `Unbinding`, permanently closes vaults upon
+  `VaultFinalizeExit` (retaining tombstones), and adds `VaultRevokeSignatures`
+  and `VaultRotateOwner`.
+* §13.4: adds optional T+90-day recovery for Class B (`GuardUnbindInitiate`,
+  `GuardUnbindCancel` with `CANCEL_COOLDOWN_BLOCKS`, `GuardUnbindFinalize`)
+  with deterministic `blockHeight < expiresAt` vs `blockHeight >= expiresAt`
+  semantics, deterministic IIP-59 auto-compounding skip during `PendingUnbind`,
+  and alignment with IIP-64 (ML-DSA EOAs).
+* §13.5, §13.6, Security Considerations, Test Cases: adds dedicated FIPS 205
+  contexts (`IoTeX-PQ-Vault-Call-v1`, `IoTeX-PQ-Vault-Accept-v1`,
+  `IoTeX-PQ-Bucket-Cancel-v1`), exact transcript encodings, four-state
+  adversarial model, and Draft 5 test invariants.
 
 **Draft 4 (2026-11-03, revised 2026-11-09)** settles the Draft 3 review topics
 raised in the IIP discussion. **All transcript and size/gas vectors change.**
