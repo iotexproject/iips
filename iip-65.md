@@ -1390,6 +1390,15 @@ benchmarks of §8 on linux/amd64 and native linux/arm64.
   define an emergency response for buckets still unbound at a break (for
   example, freezing legacy bucket actions and recovering by a hash-based proof
   of seed knowledge); this IIP does not.
+* **Preparation: longer exit windows.** In preparation for this IIP and the
+  migration it starts, the network intends to lengthen the waiting windows of
+  unstake and withdrawal (today the withdrawal wait is 3 days) to several weeks,
+  by a separate parameter change. Staked IOTX can then leave staking only weeks
+  after an unstake, which gives holders time to bind a guard and the network
+  time to respond to a break before unbound buckets can be emptied. The longer
+  windows apply to guarded buckets too. A signed op lives at most
+  `MAX_DEADLINE_WINDOW` blocks, so wallets sign a guarded WITHDRAW once the
+  withdrawal wait has passed, not together with the UNSTAKE.
 * **Exits land in ECDSA accounts.** WITHDRAW credits, and TRANSFER assigns to, a
   20-byte ECDSA address. After a break, funds taken out of the vault are exposed
   again. Holders SHOULD keep IOTX in the vault until post-quantum accounts
@@ -1493,6 +1502,9 @@ now specified:
   linux/arm64, replacing the provisional 30,000. Every gas vector rises by 120,000 per verification. The
   measurements are in `assets/iip-qsb/bench/` and the vectors in
   `assets/iip-qsb/vectors/`.
+* Security Considerations: the network intends to lengthen the unstake and
+  withdrawal waiting windows to several weeks, as preparation for the
+  migration.
 
 * §6: the native protocol addresses refused by TRANSFER with `clearGuard` are
   listed exactly; the Web3 methods, their selectors, and the zero-address
