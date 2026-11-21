@@ -1286,7 +1286,8 @@ Normative rules for Class A:
    a valid `Guard` SLH-DSA signature over `VAULT_CALL`):**
    * `VaultWithdraw(amount, recipient)` (`op = 1`): transfers an explicit
      `amount` (`> 0` and `<= balance`) atomically to `recipient` (MUST NOT be
-     zero address or `vaultPool`) with zero protocol waiting period. If
+     zero address, `vaultPool`, or any native protocol address listed in §6)
+     with zero protocol waiting period. If
      `0 < balance - amount < MIN_VAULT_BALANCE`, the action MUST revert with
      `ErrBelowMinBalance`. If `balance - amount == 0`, the vault transitions to
      `Closed` (deleting `VaultBucket` and writing a tombstone). Partial
