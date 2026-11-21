@@ -1294,7 +1294,9 @@ Normative rules for Class A:
      `expiresAt`.
    * `VaultRotateOwner(newOwner)` (`op = 2`): permitted ONLY in `Active`;
      atomically updates `owner` (MUST differ from current `owner`, non-zero, not
-     a native protocol address) and increments `generation` and `guardNonce`.
+     a native protocol address, and MUST NOT be a deployed contract account
+     `IsContract()` since contracts cannot submit native ECDSA outer
+     transactions) and increments `generation` and `guardNonce`.
    * `VaultRotateGuard(newGuard)` (`op = 3`): permitted ONLY in `Active`;
      installs a new SLH-DSA key with its own `VAULT_ACCEPT` PoP (using the
      actual `vaultIndex`, `ownerTxNonce = 0`, and `callHash = SHA-512(VAULT_CALL)`),
@@ -1445,10 +1447,21 @@ New Draft 5 receipt statuses (to be allocated in `iotex-proto` alongside
 §9.5): `ErrClassMismatch`, `ErrVaultUnbinding`, `ErrVaultClosed`,
 `ErrAlreadyUnbinding`, `ErrUnbindNotElapsed`, `ErrUnbindElapsed`,
 `ErrCancelCooldown`, `ErrStaleRequestId`, `ErrFutureRequestId`,
-`ErrBelowMinBalance`. Exact parameter values (`UNBIND_DELAY_BLOCKS = 3,110,400`,
-`CANCEL_COOLDOWN_BLOCKS = 241,920`, `MIN_VAULT_BALANCE`), `QSBSizeV2` entries,
-protobuf oneof IDs, ABI selectors, and updated test vectors MUST be finalized
-in `ParamsV2` and `assets/iip-qsb/vectors/` before this IIP leaves Draft.
+`ErrBelowMinBalance`. Default Draft 5 parameters (`UNBIND_DELAY_BLOCKS =
+3,110,400`, `CANCEL_COOLDOWN_BLOCKS = 241,920`, `MIN_VAULT_BALANCE = 100 IOTX`
+= `10^20` Rau), `QSBSizeV2` entries, protobuf oneof IDs, ABI selectors, and
+updated test vectors MUST be finalized in `ParamsV2` and
+`assets/iip-qsb/vectors/` before this IIP leaves Draft.
+
+* **Mempool pre-verification and `eth_estimateGas` preflight (non-consensus):**
+  The mempool admission policy of §9.6 extends to all Class A vault and Class B
+  recovery actions: nodes SHOULD execute cheap state/counter/anchor checks
+  followed by SLH-DSA verification before admitting or gossiping 16–32 KB
+  actions. Similarly, Web3 `eth_estimateGas` SHOULD run the same read-only
+  preflight check and return an explicit RPC error for deterministically failing
+  vault/guard calls rather than returning intrinsic gas. Web3 clients MUST check
+  `receipt.status == 1` for success (native rejections may surface non-zero
+  IoTeX `ReceiptStatus` codes such as `216–221`).
 
 #### 13.6 Adversarial model summary
 
