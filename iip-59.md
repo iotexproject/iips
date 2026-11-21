@@ -368,12 +368,12 @@ freeze height.
 Each chunk emits one EVM-compatible event per contributing delegate:
 
 ```solidity
-event DelegateDistributed(
+event DelegateVoterRewardsDistributed(
     uint64 indexed epoch,
     address indexed delegate,
     address rewardAddr,
-    uint256 totalCommission,
-    uint256 totalVoterPool,
+    uint256 eraCommission,
+    uint256 chunkVoterReward,
     bytes32 snapshotHash,
     address[] voters,
     address[] recipients,
@@ -384,14 +384,19 @@ event DelegateDistributed(
 ```
 
 `epoch` is the chunk epoch; `delegate` is candidate identity; `rewardAddr` is
-the owner frozen in the plan; `totalCommission` is the boundary epoch
-commission; and `totalVoterPool` is the sum of this event's `amounts`. The five
+the owner frozen in the plan; `eraCommission` is the era-wide commission
+repeated in each chunk; and `chunkVoterReward` is the sum of this event's
+`amounts` and MUST be summed across chunks. The five
 arrays are parallel and describe each beneficiary, actual recipient,
 delegate-level contribution, compound bucket, and route. Consumers MUST use
 `compounded`, because bucket ID zero is valid. `snapshotHash` joins a
 delegate's partial events across chunks. `amounts[i]` is this delegate's
 contribution, not the voter's combined payment. For compound routes,
 `recipients[i] = voters[i]` and `compoundBucketIds[i]` identifies the bucket.
+Events are grouped by delegate even though settlement traverses voters. A voter
+who voted for multiple delegates therefore appears once in each contributing
+delegate's event, while the protocol may combine those contributions into one
+payment to the voter.
 
 Every chunk first emits `CURSOR_PROGRESS`, encoding
 `targetEra:shardsDone:hex(resumeVoter):shardsRemaining` in its address field and
@@ -501,7 +506,7 @@ distributing post-fork rewards for automatically migrated delegates.
 
 `ForwardRegistration` entries are not imported. A voter requiring a non-default
 destination must configure it once. Historical post-activation distributions
-are reconstructed from receipts and `DelegateDistributed`, not persistent
+are reconstructed from receipts and `DelegateVoterRewardsDistributed`, not persistent
 per-voter history.
 
 ## Security Considerations
